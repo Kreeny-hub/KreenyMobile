@@ -1,6 +1,7 @@
 import { query, mutation } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
 import { authComponent } from "./auth";
+import { assertDevMutationEnabled } from "./_lib/devGuards";
 
 function computeDepositRange(pricePerDay: number) {
   // MVP simple, à ajuster selon ton marché
@@ -71,7 +72,7 @@ export const createVehicle = mutation({
     // 🔒 Limite compte standard = 2 annonces
     const existing = await ctx.db
       .query("vehicles")
-      .filter((q) => q.eq(q.field("ownerUserId"), ownerUserId))
+      .withIndex("by_owner", (q) => q.eq("ownerUserId", ownerUserId))
       .collect();
 
     if (existing.length >= 2) {
@@ -119,7 +120,7 @@ export const listMyListingsWithRequestCount = query({
 
     const vehicles = await ctx.db
       .query("vehicles")
-      .filter((q) => q.eq(q.field("ownerUserId"), ownerUserId))
+      .withIndex("by_owner", (q) => q.eq("ownerUserId", ownerUserId))
       .order("desc")
       .take(50);
 
@@ -174,6 +175,8 @@ export const backfillVehicleDeposits = mutation({
 export const seedVehicles = mutation({
   args: {},
   handler: async (ctx) => {
+    assertDevMutationEnabled();
+
     const seeds = await ctx.db
       .query("vehicles")
       .filter((q) => q.eq(q.field("isSeed"), true))

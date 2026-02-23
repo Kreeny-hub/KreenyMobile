@@ -9,6 +9,7 @@ import {
 } from "./_lib/reservationGuards";
 import { transitionReservationStatus } from "./_lib/reservationTransitions";
 import { acquireVehicleLocks, releaseVehicleLocks } from "./_lib/vehicleLocks";
+import { assertDevMutationEnabled } from "./_lib/devGuards";
 import { authComponent } from "./auth";
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -39,7 +40,7 @@ export const getReservationsForVehicle = query({
   handler: async (ctx, args) => {
     const reservations = await ctx.db
       .query("reservations")
-      .filter((q) => q.eq(q.field("vehicleId"), args.vehicleId))
+      .withIndex("by_vehicle", (q) => q.eq("vehicleId", args.vehicleId))
       .collect();
 
     return reservations
@@ -67,7 +68,7 @@ export const listReservationsForOwnerVehicle = query({
 
     return await ctx.db
       .query("reservations")
-      .filter((q) => q.eq(q.field("vehicleId"), args.vehicleId))
+      .withIndex("by_vehicle", (q) => q.eq("vehicleId", args.vehicleId))
       .order("desc")
       .take(50);
   },
@@ -82,7 +83,7 @@ export const listMyReservations = query({
 
     return await ctx.db
       .query("reservations")
-      .filter((q) => q.eq(q.field("renterUserId"), renterUserId))
+      .withIndex("by_renter", (q) => q.eq("renterUserId", renterUserId))
       .order("desc")
       .take(50);
   },
@@ -97,7 +98,7 @@ export const listMyReservationsWithVehicle = query({
 
     const reservations = await ctx.db
       .query("reservations")
-      .filter((q) => q.eq(q.field("renterUserId"), renterUserId))
+      .withIndex("by_renter", (q) => q.eq("renterUserId", renterUserId))
       .order("desc")
       .take(50);
 
@@ -218,6 +219,8 @@ export const initPayment = mutation({
 export const markReservationPaid = mutation({
   args: { reservationId: v.id("reservations") },
   handler: async (ctx, args) => {
+    assertDevMutationEnabled();
+
     const user = await authComponent.getAuthUser(ctx);
     if (!user) throw new ConvexError("Unauthenticated");
     const renterUserId = userKey(user);
@@ -290,6 +293,8 @@ export const cancelReservation = mutation({
 export const markDropoffPending = mutation({
   args: { reservationId: v.id("reservations") },
   handler: async (ctx, args) => {
+    assertDevMutationEnabled();
+
     const user = await authComponent.getAuthUser(ctx);
     if (!user) throw new ConvexError("Unauthenticated");
     const me = userKey(user);
@@ -335,9 +340,8 @@ export const createReservation = mutation({
 
     const existingSamePair = await ctx.db
       .query("reservations")
-      .filter((q) =>
-        q.and(q.eq(q.field("vehicleId"), args.vehicleId), q.eq(q.field("renterUserId"), renterUserId))
-      )
+      .withIndex("by_vehicle", (q) => q.eq("vehicleId", args.vehicleId))
+      .filter((q) => q.eq(q.field("renterUserId"), renterUserId))
       .order("desc")
       .take(1);
 
@@ -365,7 +369,7 @@ export const createReservation = mutation({
     // (on garde ton overlap check en “filet” MVP)
     const existing = await ctx.db
       .query("reservations")
-      .filter((q) => q.eq(q.field("vehicleId"), args.vehicleId))
+      .withIndex("by_vehicle", (q) => q.eq("vehicleId", args.vehicleId))
       .collect();
 
     const overlaps = existing.some((r: any) => {
@@ -497,7 +501,7 @@ export const expireUnpaidReservations = mutation({
 
     const reservations = await ctx.db
       .query("reservations")
-      .filter((q) => q.eq(q.field("status"), "accepted_pending_payment"))
+      .withIndex("by_status", (q) => q.eq("status", "accepted_pending_payment"))
       .collect();
 
     let count = 0;

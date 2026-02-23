@@ -1,50 +1,52 @@
-# Welcome to your Expo app 👋
+# Kreeny Mobile
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Application mobile marketplace de location de voitures (Expo + Convex).
 
-## Get started
+## Stack
 
-1. Install dependencies
+- Expo Router + React Native
+- Convex (backend, temps réel, jobs cron)
+- better-auth (auth)
+- Zod (validation côté client/domain)
 
-   ```bash
-   npm install
-   ```
+## Démarrage local
 
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+1. Installer les dépendances:
 
 ```bash
-npm run reset-project
+npm install
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+2. Lancer l'app:
 
-## Learn more
+```bash
+npm run start
+```
 
-To learn more about developing your project with Expo, look at the following resources:
+3. Lancer Convex en dev (dans un autre terminal):
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+```bash
+npx convex dev
+```
 
-## Join the community
+## Variables d'environnement
 
-Join our community of developers creating universal apps.
+- `CONVEX_DEPLOYMENT`: fourni par Convex.
+- `ENABLE_DEV_ACTIONS=true`: autorise les mutations de debug (ex: `DEV_MARK_PAID`, seed véhicules).
+  - Par défaut, les actions DEV sont bloquées hors déploiement `dev:`.
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+## Architecture backend (résumé)
+
+- `convex/schema.ts`: schéma + indexes.
+- `convex/reservations.ts`: cycle de vie des réservations.
+- `convex/chat*.ts`: messagerie transactionnelle liée aux réservations.
+- `convex/_lib/reservationStateMachine.ts`: transitions autorisées.
+- `convex/_lib/reservationTransitions.ts`: transition atomique + event.
+- `convex/crons.ts`: maintenance automatique (expiration des réservations non payées).
+
+## Sécurité et robustesse
+
+- Contrôle d'authentification et ownership sur les mutations critiques.
+- Status de réservation/paiement/caution typés strictement au schéma.
+- Upload URL Convex Storage protégée par auth.
+- Mutations DEV protégées par garde d'environnement.

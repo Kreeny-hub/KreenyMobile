@@ -1,5 +1,14 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import {
+  DEPOSIT_STATUSES,
+  PAYMENT_STATUSES,
+  RESERVATION_STATUSES,
+} from "./_lib/reservationTypes";
+
+function literalUnion<const T extends readonly string[]>(values: T) {
+  return v.union(...values.map((value) => v.literal(value)));
+}
 
 export default defineSchema({
   vehicles: defineTable({
@@ -16,7 +25,7 @@ export default defineSchema({
     depositMin: v.optional(v.number()),
     depositMax: v.optional(v.number()),
     depositSelected: v.optional(v.number()),
-  }),
+  }).index("by_owner", ["ownerUserId"]),
 
   reservations: defineTable({
     vehicleId: v.id("vehicles"),
@@ -24,11 +33,11 @@ export default defineSchema({
     ownerUserId: v.optional(v.string()),
     startDate: v.string(),
     endDate: v.string(),
-    status: v.string(),
+    status: literalUnion(RESERVATION_STATUSES),
     createdAt: v.number(),
     version: v.optional(v.number()),
     acceptedAt: v.optional(v.number()),
-    depositStatus: v.optional(v.string()), // "unheld" | "held" | "released" | "failed"
+    depositStatus: v.optional(literalUnion(DEPOSIT_STATUSES)),
     depositHoldRef: v.optional(v.string()), // futur Stripe hold id
 
     // ✅ caution figée sur la réservation (optionnel le temps du backfill)
@@ -38,9 +47,13 @@ export default defineSchema({
     currency: v.optional(v.string()), // "MAD"
     totalAmount: v.optional(v.number()), // montant location (hors caution)
     commissionAmount: v.optional(v.number()), // commission plateforme
-    paymentStatus: v.optional(v.string()), // "unpaid" | "requires_action" | "authorized" | "captured" | "failed" | ...
+    paymentStatus: v.optional(literalUnion(PAYMENT_STATUSES)),
     stripePaymentIntentId: v.optional(v.string()), // futur
-  }),
+  })
+    .index("by_vehicle", ["vehicleId"])
+    .index("by_renter", ["renterUserId"])
+    .index("by_status", ["status"])
+    .index("by_vehicle_status", ["vehicleId", "status"]),
 
   conditionReports: defineTable({
     reservationId: v.id("reservations"),

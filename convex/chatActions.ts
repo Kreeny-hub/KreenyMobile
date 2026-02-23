@@ -1,6 +1,7 @@
 import { ConvexError, v } from "convex/values";
 import { mutation } from "./_generated/server";
 import { getRoleOrThrow, loadReservationOrThrow } from "./_lib/reservationGuards";
+import { assertDevMutationEnabled } from "./_lib/devGuards";
 import { transitionReservationStatus } from "./_lib/reservationTransitions";
 import { authComponent } from "./auth";
 
@@ -80,6 +81,8 @@ export const runChatAction = mutation({
        * - paymentStatus requires_action
        */
       case "DEV_MARK_PAID": {
+        assertDevMutationEnabled();
+
         if (role !== "renter") return { ok: false, code: "Forbidden" };
 
         if (reservation.status !== "accepted_pending_payment") {
@@ -113,6 +116,8 @@ export const runChatAction = mutation({
        * - uniquement si in_progress
        */
       case "DEV_DROPOFF_PENDING": {
+        assertDevMutationEnabled();
+
         if (reservation.status !== "in_progress") {
           return { ok: false, code: "InvalidStatus" };
         }

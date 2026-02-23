@@ -1,17 +1,5 @@
 import { ConvexError } from "convex/values";
-
-export const ReservationStatuses = [
-  "requested",
-  "accepted_pending_payment",
-  "pickup_pending",
-  "in_progress",
-  "dropoff_pending",
-  "completed",
-  "rejected",
-  "cancelled",
-] as const;
-
-export type ReservationStatus = (typeof ReservationStatuses)[number];
+import { type ReservationStatus } from "./reservationTypes";
 
 // Liste des transitions autorisées (source de vérité)
 const ALLOWED: Record<ReservationStatus, ReservationStatus[]> = {
