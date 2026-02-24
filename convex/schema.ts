@@ -3,21 +3,21 @@ import { v } from "convex/values";
 
 export default defineSchema({
   vehicles: defineTable({
-  title: v.string(),
-  pricePerDay: v.number(),
-  city: v.string(),
-  imageUrls: v.array(v.string()),
-  ownerId: v.optional(v.id("users")),
-  ownerUserId: v.optional(v.string()),
-  createdAt: v.number(),
-  isSeed: v.optional(v.boolean()),
+    title: v.string(),
+    pricePerDay: v.number(),
+    city: v.string(),
+    imageUrls: v.array(v.string()),
+    ownerId: v.optional(v.id("users")),
+    ownerUserId: v.optional(v.string()),
+    createdAt: v.number(),
+    isSeed: v.optional(v.boolean()),
 
-  depositMin: v.optional(v.number()),
-  depositMax: v.optional(v.number()),
-  depositSelected: v.optional(v.number()),
-})
-  .index("by_city_createdAt", ["city", "createdAt"])
-  .index("by_ownerUserId", ["ownerUserId"]),
+    depositMin: v.optional(v.number()),
+    depositMax: v.optional(v.number()),
+    depositSelected: v.optional(v.number()),
+  })
+    .index("by_city_createdAt", ["city", "createdAt"])
+    .index("by_ownerUserId", ["ownerUserId"]),
 
   reservations: defineTable({
     vehicleId: v.id("vehicles"),
@@ -171,26 +171,39 @@ export default defineSchema({
     .index("by_reservation", ["reservationId"])
     .index("by_vehicle_date", ["vehicleId", "date"]),
 
-    userFiles: defineTable({
-  userId: v.string(), // identifiant user (comme tu utilises dans le reste)
-  kind: v.union(
-    v.literal("avatar"),
-    v.literal("condition_required_photo"),
-    v.literal("condition_detail_photo"),
-    v.literal("condition_video360")
-  ),
-  storageId: v.id("_storage"),
-  mimeType: v.string(),
-  byteSize: v.number(),
-  createdAt: v.number(),
+  userFiles: defineTable({
+    userId: v.string(), // identifiant user (comme tu utilises dans le reste)
+    kind: v.union(
+      v.literal("avatar"),
+      v.literal("condition_required_photo"),
+      v.literal("condition_detail_photo"),
+      v.literal("condition_video360")
+    ),
+    storageId: v.id("_storage"),
+    mimeType: v.string(),
+    byteSize: v.number(),
+    createdAt: v.number(),
 
-  // optionnel mais utile pour ownership / organisation
-  reservationId: v.optional(v.id("reservations")),
-  reportId: v.optional(v.id("conditionReports")),
-})
-  .index("by_user", ["userId", "createdAt"])
-  .index("by_user_kind", ["userId", "kind", "createdAt"])
-  .index("by_reservation", ["reservationId", "createdAt"]),
+    // optionnel mais utile pour ownership / organisation
+    reservationId: v.optional(v.id("reservations")),
+    reportId: v.optional(v.id("conditionReports")),
+  })
+    .index("by_user", ["userId", "createdAt"])
+    .index("by_user_kind", ["userId", "kind", "createdAt"])
+    .index("by_reservation", ["reservationId", "createdAt"]),
+
+  userProfiles: defineTable({
+    userId: v.string(), // ton identifiant (me = userId/email/_id string)
+    createdAt: v.number(),
+    updatedAt: v.number(),
+
+    // Avatar sensible (Convex Storage)
+    avatarStorageId: v.optional(v.id("_storage")),
+
+    // optionnel pour plus tard
+    displayName: v.optional(v.string()),
+  })
+    .index("by_user", ["userId"]),
 
 
 });

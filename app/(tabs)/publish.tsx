@@ -32,9 +32,9 @@ export default function Publish() {
         pricePerDay: price,
       });
 
-      Alert.alert("✅ Annonce créée", "Ton annonce est prête.");
-      // Optionnel : aller voir “Mes annonces”
-      router.push("/profile/listings");
+      Alert.alert("✅ Annonce créée", "Ajoute des photos pour rendre ton annonce attractive !");
+      // ✅ Redirige vers l'upload de photos
+      router.push(`/vehicle/images?vehicleId=${res.vehicleId}`);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Erreur inconnue";
       // Message plus friendly pour la limite

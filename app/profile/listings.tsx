@@ -31,28 +31,61 @@ export default function MyListings() {
       </Text>
 
       <View style={{ gap: 10 }}>
-        {data.map((item) => (
-          <Pressable
-            key={item.vehicle._id}
-            onPress={() =>
-              router.push(`/profile/listings/${item.vehicle._id}`)
-            }
-            style={{
-              borderWidth: 1,
-              borderRadius: 12,
-              padding: 12,
-            }}
-          >
-            <Text style={{ fontWeight: "600" }}>{item.vehicle.title}</Text>
-            <Text>{item.vehicle.city}</Text>
+        {data.map((item) => {
+          const photoCount = item.vehicle.imageUrls?.length ?? 0;
 
-            {item.requestCount > 0 && (
-              <Text style={{ color: "red", marginTop: 6 }}>
-                🔴 {item.requestCount} demande(s)
-              </Text>
-            )}
-          </Pressable>
-        ))}
+          return (
+            <View
+              key={item.vehicle._id}
+              style={{
+                borderWidth: 1,
+                borderRadius: 12,
+                padding: 12,
+                gap: 8,
+              }}
+            >
+              {/* Infos véhicule — tap pour voir les réservations */}
+              <Pressable
+                onPress={() =>
+                  router.push(`/profile/listings/${item.vehicle._id}`)
+                }
+              >
+                <Text style={{ fontWeight: "700", fontSize: 16 }}>
+                  {item.vehicle.title}
+                </Text>
+                <Text style={{ opacity: 0.7 }}>
+                  {item.vehicle.city} — {item.vehicle.pricePerDay} MAD/jour
+                </Text>
+
+                {item.requestCount > 0 && (
+                  <Text style={{ color: "red", marginTop: 4 }}>
+                    🔴 {item.requestCount} demande(s) en attente
+                  </Text>
+                )}
+              </Pressable>
+
+              {/* ✅ Lien vers la gestion des photos */}
+              <Pressable
+                onPress={() =>
+                  router.push(`/vehicle/images?vehicleId=${item.vehicle._id}`)
+                }
+                style={{
+                  backgroundColor: photoCount === 0 ? "#fee" : "#f5f5f5",
+                  borderRadius: 8,
+                  padding: 10,
+                  flexDirection: "row",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                }}
+              >
+                <Text style={{ fontWeight: "600" }}>
+                  📷 {photoCount > 0 ? `${photoCount} photo(s)` : "Aucune photo"}
+                </Text>
+                <Text style={{ opacity: 0.5 }}>Gérer →</Text>
+              </Pressable>
+            </View>
+          );
+        })}
       </View>
     </SafeAreaView>
   );

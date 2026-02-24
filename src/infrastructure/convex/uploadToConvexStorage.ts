@@ -8,16 +8,15 @@ export async function uploadToConvexStorage(
 ): Promise<string> {
   const uploadUrl = await convex.mutation(api.files.generateUploadUrl, {});
 
-  const form = new FormData();
-  form.append("file", {
-    uri: file.uri,
-    type: file.mimeType,
-    name: file.name,
-  } as any);
+  // ✅ FIX : Envoyer le blob brut avec Content-Type explicite
+  // (FormData encapsule dans du multipart, ce qui corrompt le fichier dans Convex Storage)
+  const fileResp = await fetch(file.uri);
+  const blob = await fileResp.blob();
 
   const res = await fetch(uploadUrl, {
     method: "POST",
-    body: form,
+    headers: { "Content-Type": file.mimeType },
+    body: blob,
   });
 
   if (!res.ok) {

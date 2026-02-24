@@ -25,11 +25,13 @@ import type * as conditionReports from "../conditionReports.js";
 import type * as crons from "../crons.js";
 import type * as dashboard from "../dashboard.js";
 import type * as debug_listReservationStatuses from "../debug/listReservationStatuses.js";
+import type * as debug_migrateProfilesToAuthId from "../debug/migrateProfilesToAuthId.js";
 import type * as files from "../files.js";
 import type * as http from "../http.js";
 import type * as ping from "../ping.js";
 import type * as reservations from "../reservations.js";
 import type * as uploads from "../uploads.js";
+import type * as userProfiles from "../userProfiles.js";
 import type * as vehicles from "../vehicles.js";
 
 import type {
@@ -56,11 +58,13 @@ declare const fullApi: ApiFromModules<{
   crons: typeof crons;
   dashboard: typeof dashboard;
   "debug/listReservationStatuses": typeof debug_listReservationStatuses;
+  "debug/migrateProfilesToAuthId": typeof debug_migrateProfilesToAuthId;
   files: typeof files;
   http: typeof http;
   ping: typeof ping;
   reservations: typeof reservations;
   uploads: typeof uploads;
+  userProfiles: typeof userProfiles;
   vehicles: typeof vehicles;
 }>;
 

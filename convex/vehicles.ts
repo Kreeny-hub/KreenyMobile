@@ -20,6 +20,24 @@ export const listVehicles = query({
   },
 });
 
+/** Listing avec la première image résolue (pour les cards) */
+export const listVehiclesWithCover = query({
+  args: {},
+  handler: async (ctx) => {
+    const vehicles = await ctx.db.query("vehicles").order("desc").take(20);
+
+    const results = [];
+    for (const v of vehicles) {
+      let coverUrl: string | null = null;
+      if (v.imageUrls.length > 0) {
+        coverUrl = await ctx.storage.getUrl(v.imageUrls[0] as any);
+      }
+      results.push({ ...v, coverUrl });
+    }
+    return results;
+  },
+});
+
 export const getVehicleById = query({
   args: { id: v.id("vehicles") },
   handler: async (ctx, args) => {
@@ -49,6 +67,40 @@ export const searchVehicles = query({
     }
 
     return results;
+  },
+});
+
+/** Recherche avec image de couverture résolue */
+export const searchVehiclesWithCover = query({
+  args: {
+    city: v.optional(v.string()),
+    maxPricePerDay: v.optional(v.number()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const limit = args.limit ?? 20;
+
+    let q = ctx.db.query("vehicles").order("desc");
+
+    if (args.city && args.city.trim().length > 0) {
+      q = q.filter((f) => f.eq(f.field("city"), args.city!.trim()));
+    }
+
+    let results = await q.take(limit);
+
+    if (typeof args.maxPricePerDay === "number") {
+      results = results.filter((v) => v.pricePerDay <= args.maxPricePerDay!);
+    }
+
+    const withCovers = [];
+    for (const v of results) {
+      let coverUrl: string | null = null;
+      if (v.imageUrls.length > 0) {
+        coverUrl = await ctx.storage.getUrl(v.imageUrls[0] as any);
+      }
+      withCovers.push({ ...v, coverUrl });
+    }
+    return withCovers;
   },
 });
 
@@ -143,6 +195,125 @@ export const listMyListingsWithRequestCount = query({
     }
 
     return results;
+  },
+});
+
+/* ======================================================
+   VEHICLE IMAGES (Convex Storage)
+====================================================== */
+
+const MAX_VEHICLE_IMAGES = 6;
+const VEHICLE_IMAGE_MAX_BYTES = 5 * 1024 * 1024; // 5 MB
+const VEHICLE_IMAGE_MIMES = new Set(["image/jpeg", "image/png", "image/webp"]);
+
+/** Génère une URL d'upload pour une image de véhicule (owner only) */
+export const generateVehicleImageUploadUrl = mutation({
+  args: {
+    vehicleId: v.id("vehicles"),
+    mimeType: v.string(),
+    byteSize: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const user = await authComponent.getAuthUser(ctx);
+    if (!user) throw new ConvexError("Unauthenticated");
+    const me = String(user.userId ?? user.email ?? user._id);
+
+    // ✅ Ownership check
+    const vehicle = await ctx.db.get(args.vehicleId);
+    if (!vehicle) throw new ConvexError("VehicleNotFound");
+    if (String(vehicle.ownerUserId) !== me) throw new ConvexError("Forbidden");
+
+    // ✅ Limite nombre de photos
+    if (vehicle.imageUrls.length >= MAX_VEHICLE_IMAGES) {
+      throw new ConvexError("TooManyImages");
+    }
+
+    // ✅ Validation taille + type
+    if (args.byteSize > VEHICLE_IMAGE_MAX_BYTES) {
+      throw new ConvexError("FILE_TOO_LARGE");
+    }
+    if (!VEHICLE_IMAGE_MIMES.has(args.mimeType)) {
+      throw new ConvexError("BAD_MIME");
+    }
+
+    const uploadUrl = await ctx.storage.generateUploadUrl();
+    return { ok: true as const, uploadUrl };
+  },
+});
+
+/** Ajoute un storageId à la liste des images du véhicule (owner only) */
+export const addVehicleImage = mutation({
+  args: {
+    vehicleId: v.id("vehicles"),
+    storageId: v.string(), // storageId retourné par Convex après upload
+  },
+  handler: async (ctx, args) => {
+    const user = await authComponent.getAuthUser(ctx);
+    if (!user) throw new ConvexError("Unauthenticated");
+    const me = String(user.userId ?? user.email ?? user._id);
+
+    const vehicle = await ctx.db.get(args.vehicleId);
+    if (!vehicle) throw new ConvexError("VehicleNotFound");
+    if (String(vehicle.ownerUserId) !== me) throw new ConvexError("Forbidden");
+
+    if (vehicle.imageUrls.length >= MAX_VEHICLE_IMAGES) {
+      throw new ConvexError("TooManyImages");
+    }
+
+    await ctx.db.patch(args.vehicleId, {
+      imageUrls: [...vehicle.imageUrls, args.storageId],
+    });
+
+    return { ok: true };
+  },
+});
+
+/** Supprime une image du véhicule par son storageId (owner only) */
+export const removeVehicleImage = mutation({
+  args: {
+    vehicleId: v.id("vehicles"),
+    storageId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const user = await authComponent.getAuthUser(ctx);
+    if (!user) throw new ConvexError("Unauthenticated");
+    const me = String(user.userId ?? user.email ?? user._id);
+
+    const vehicle = await ctx.db.get(args.vehicleId);
+    if (!vehicle) throw new ConvexError("VehicleNotFound");
+    if (String(vehicle.ownerUserId) !== me) throw new ConvexError("Forbidden");
+
+    await ctx.db.patch(args.vehicleId, {
+      imageUrls: vehicle.imageUrls.filter((id) => id !== args.storageId),
+    });
+
+    // ✅ Nettoyage : supprimer le fichier du storage
+    try {
+      await ctx.storage.delete(args.storageId as any);
+    } catch {
+      // pas grave si déjà supprimé
+    }
+
+    return { ok: true };
+  },
+});
+
+/** Retourne un véhicule avec ses URLs d'images résolues */
+export const getVehicleWithImages = query({
+  args: { id: v.id("vehicles") },
+  handler: async (ctx, args) => {
+    const vehicle = await ctx.db.get(args.id);
+    if (!vehicle) return null;
+
+    // Résoudre chaque storageId en URL CDN
+    const resolvedUrls: (string | null)[] = await Promise.all(
+      vehicle.imageUrls.map((sid) => ctx.storage.getUrl(sid as any))
+    );
+
+    return {
+      ...vehicle,
+      resolvedImageUrls: resolvedUrls.filter(Boolean) as string[],
+    };
   },
 });
 

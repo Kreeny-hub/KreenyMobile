@@ -1,13 +1,20 @@
-import { Text, View, Button, Pressable } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { useQuery } from "convex/react";
 import { router } from "expo-router";
-import { useAuthStatus } from "../../src/presentation/hooks/useAuthStatus";
+import { Alert, Button, Image, Pressable, Text, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { api } from "../../convex/_generated/api";
 import { authClient } from "../../src/lib/auth-client";
-import { Alert } from "react-native";
+import { useAuthStatus } from "../../src/presentation/hooks/useAuthStatus";
 
 export default function ProfileTab() {
   const { isLoading, isAuthenticated, session } = useAuthStatus();
   const user = session?.data?.user;
+
+  // ✅ Récupérer l'URL avatar via Convex Storage (CDN)
+  const avatarUrl = useQuery(
+    api.userProfiles.getMyAvatarUrl,
+    isAuthenticated ? {} : "skip"
+  );
 
   if (isLoading) {
     return (
@@ -40,6 +47,40 @@ export default function ProfileTab() {
   // -----------------------
   return (
     <SafeAreaView style={{ flex: 1, padding: 16 }}>
+      {/* ✅ Avatar + nom */}
+      <Pressable
+        onPress={() => router.push("/profile/avatar")}
+        style={{ alignItems: "center", marginBottom: 20 }}
+      >
+        {avatarUrl ? (
+          <Image
+            source={{ uri: avatarUrl }}
+            style={{
+              width: 80,
+              height: 80,
+              borderRadius: 40,
+              backgroundColor: "#f0f0f0",
+            }}
+          />
+        ) : (
+          <View
+            style={{
+              width: 80,
+              height: 80,
+              borderRadius: 40,
+              backgroundColor: "#f0f0f0",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Text style={{ fontSize: 32, opacity: 0.3 }}>👤</Text>
+          </View>
+        )}
+        <Text style={{ marginTop: 8, opacity: 0.6, fontSize: 13 }}>
+          Modifier la photo
+        </Text>
+      </Pressable>
+
       <Text style={{ fontSize: 24, fontWeight: "700", marginBottom: 6 }}>
         Mon profil
       </Text>

@@ -47,8 +47,14 @@ export const generateSensitiveUploadUrl = mutation({
         return { ok: false as const, code: "MISSING_RESERVATION" as const };
       }
 
-      // TODO ownership strict (on le fait à l’étape suivante) :
-      // vérifier que `me` est owner/renter de la réservation.
+      // ✅ Ownership check : vérifier que l'utilisateur est owner ou renter
+      const reservation = await ctx.db.get(args.reservationId);
+      if (!reservation) {
+        return { ok: false as const, code: "RESERVATION_NOT_FOUND" as const };
+      }
+      if (reservation.renterUserId !== me && reservation.ownerUserId !== me) {
+        return { ok: false as const, code: "FORBIDDEN" as const };
+      }
     }
 
     const uploadUrl = await ctx.storage.generateUploadUrl();
