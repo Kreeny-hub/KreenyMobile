@@ -8,6 +8,8 @@
  * @module
  */
 
+import type * as _lib_chatActions from "../_lib/chatActions.js";
+import type * as _lib_enums from "../_lib/enums.js";
 import type * as _lib_paymentEngine from "../_lib/paymentEngine.js";
 import type * as _lib_reservationEvents from "../_lib/reservationEvents.js";
 import type * as _lib_reservationGuards from "../_lib/reservationGuards.js";
@@ -22,10 +24,12 @@ import type * as chatSend from "../chatSend.js";
 import type * as conditionReports from "../conditionReports.js";
 import type * as crons from "../crons.js";
 import type * as dashboard from "../dashboard.js";
+import type * as debug_listReservationStatuses from "../debug/listReservationStatuses.js";
 import type * as files from "../files.js";
 import type * as http from "../http.js";
 import type * as ping from "../ping.js";
 import type * as reservations from "../reservations.js";
+import type * as uploads from "../uploads.js";
 import type * as vehicles from "../vehicles.js";
 
 import type {
@@ -35,6 +39,8 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  "_lib/chatActions": typeof _lib_chatActions;
+  "_lib/enums": typeof _lib_enums;
   "_lib/paymentEngine": typeof _lib_paymentEngine;
   "_lib/reservationEvents": typeof _lib_reservationEvents;
   "_lib/reservationGuards": typeof _lib_reservationGuards;
@@ -49,10 +55,12 @@ declare const fullApi: ApiFromModules<{
   conditionReports: typeof conditionReports;
   crons: typeof crons;
   dashboard: typeof dashboard;
+  "debug/listReservationStatuses": typeof debug_listReservationStatuses;
   files: typeof files;
   http: typeof http;
   ping: typeof ping;
   reservations: typeof reservations;
+  uploads: typeof uploads;
   vehicles: typeof vehicles;
 }>;
 

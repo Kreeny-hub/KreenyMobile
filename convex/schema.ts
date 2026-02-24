@@ -3,20 +3,21 @@ import { v } from "convex/values";
 
 export default defineSchema({
   vehicles: defineTable({
-    title: v.string(),
-    pricePerDay: v.number(),
-    city: v.string(),
-    imageUrls: v.array(v.string()),
-    ownerId: v.optional(v.id("users")),
-    ownerUserId: v.optional(v.string()),
-    createdAt: v.number(),
-    isSeed: v.optional(v.boolean()),
+  title: v.string(),
+  pricePerDay: v.number(),
+  city: v.string(),
+  imageUrls: v.array(v.string()),
+  ownerId: v.optional(v.id("users")),
+  ownerUserId: v.optional(v.string()),
+  createdAt: v.number(),
+  isSeed: v.optional(v.boolean()),
 
-    // ✅ RISK layer (optionnel le temps du backfill)
-    depositMin: v.optional(v.number()),
-    depositMax: v.optional(v.number()),
-    depositSelected: v.optional(v.number()),
-  }),
+  depositMin: v.optional(v.number()),
+  depositMax: v.optional(v.number()),
+  depositSelected: v.optional(v.number()),
+})
+  .index("by_city_createdAt", ["city", "createdAt"])
+  .index("by_ownerUserId", ["ownerUserId"]),
 
   reservations: defineTable({
     vehicleId: v.id("vehicles"),
@@ -24,23 +25,56 @@ export default defineSchema({
     ownerUserId: v.optional(v.string()),
     startDate: v.string(),
     endDate: v.string(),
-    status: v.string(),
+
+    status: v.union(
+      v.literal("requested"),
+      v.literal("accepted_pending_payment"),
+      v.literal("pickup_pending"),
+      v.literal("in_progress"),
+      v.literal("dropoff_pending"),
+      v.literal("completed"),
+      v.literal("cancelled"),
+      v.literal("rejected")
+    ),
+
     createdAt: v.number(),
     version: v.optional(v.number()),
     acceptedAt: v.optional(v.number()),
-    depositStatus: v.optional(v.string()), // "unheld" | "held" | "released" | "failed"
-    depositHoldRef: v.optional(v.string()), // futur Stripe hold id
 
-    // ✅ caution figée sur la réservation (optionnel le temps du backfill)
+    depositStatus: v.optional(
+      v.union(
+        v.literal("unheld"),
+        v.literal("held"),
+        v.literal("released"),
+        v.literal("failed")
+      )
+    ),
+    depositHoldRef: v.optional(v.string()),
     depositAmount: v.optional(v.number()),
 
-    // ✅ paiement (préparation Stripe) — optionnel pour l’instant
-    currency: v.optional(v.string()), // "MAD"
-    totalAmount: v.optional(v.number()), // montant location (hors caution)
-    commissionAmount: v.optional(v.number()), // commission plateforme
-    paymentStatus: v.optional(v.string()), // "unpaid" | "requires_action" | "authorized" | "captured" | "failed" | ...
-    stripePaymentIntentId: v.optional(v.string()), // futur
-  }),
+    currency: v.optional(v.string()),
+    totalAmount: v.optional(v.number()),
+    commissionAmount: v.optional(v.number()),
+
+    paymentStatus: v.optional(
+      v.union(
+        v.literal("unpaid"),
+        v.literal("requires_action"),
+        v.literal("processing"),
+        v.literal("captured"),
+        v.literal("failed"),
+        v.literal("cancelled")
+      )
+    ),
+
+    stripePaymentIntentId: v.optional(v.string()),
+  })
+    .index("by_vehicle", ["vehicleId"])
+    .index("by_renter", ["renterUserId"])
+    .index("by_owner", ["ownerUserId"])
+    .index("by_status", ["status"])
+    .index("by_renter_status_createdAt", ["renterUserId", "status", "createdAt"])
+    .index("by_owner_status_createdAt", ["ownerUserId", "status", "createdAt"]),
 
   conditionReports: defineTable({
     reservationId: v.id("reservations"),
@@ -136,6 +170,27 @@ export default defineSchema({
 
     .index("by_reservation", ["reservationId"])
     .index("by_vehicle_date", ["vehicleId", "date"]),
+
+    userFiles: defineTable({
+  userId: v.string(), // identifiant user (comme tu utilises dans le reste)
+  kind: v.union(
+    v.literal("avatar"),
+    v.literal("condition_required_photo"),
+    v.literal("condition_detail_photo"),
+    v.literal("condition_video360")
+  ),
+  storageId: v.id("_storage"),
+  mimeType: v.string(),
+  byteSize: v.number(),
+  createdAt: v.number(),
+
+  // optionnel mais utile pour ownership / organisation
+  reservationId: v.optional(v.id("reservations")),
+  reportId: v.optional(v.id("conditionReports")),
+})
+  .index("by_user", ["userId", "createdAt"])
+  .index("by_user_kind", ["userId", "kind", "createdAt"])
+  .index("by_reservation", ["reservationId", "createdAt"]),
 
 
 });

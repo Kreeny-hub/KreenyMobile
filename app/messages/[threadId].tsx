@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Alert, FlatList, Pressable, Text, TextInput, View } from "react-native";
 import { api } from "../../convex/_generated/api";
 
-import { useListAutoBottom } from "../../src/ui/hooks/useListAutoBottom";
+import { useChatScroll } from "../../src/ui/hooks/useChatScroll";
 import { AppScreen } from "../../src/ui/layout/AppScreen";
 
 export default function ThreadScreen() {
@@ -16,9 +16,8 @@ export default function ThreadScreen() {
   const refreshActions = useMutation(api.chat.refreshThreadActions);
 
   const [draft, setDraft] = useState("");
-  const [inputBarHeight, setInputBarHeight] = useState(0);
 
-  const { listProps, onInputFocus } = useListAutoBottom();
+  const { listRef, scrollToBottom, onMessagesReady } = useChatScroll();
 
   const thread = useQuery(
     api.chat.getThread,
@@ -32,7 +31,7 @@ export default function ThreadScreen() {
 
   const messages = useMemo(() => {
     if (!messagesRaw) return null;
-    return [...messagesRaw].reverse();
+    return [...messagesRaw].reverse(); // oldest -> newest
   }, [messagesRaw]);
 
   useEffect(() => {
@@ -40,24 +39,32 @@ export default function ThreadScreen() {
     refreshActions({ threadId: threadId as any });
   }, [threadId, refreshActions]);
 
-  return (
-    <AppScreen withBottomSafeArea>
-      <View style={{ flex: 1, paddingHorizontal: 16, paddingTop: 16 }}>
-        <Text style={{ fontSize: 18, fontWeight: "700", marginBottom: 12 }}>
-          Conversation
-        </Text>
+  useEffect(() => {
+    onMessagesReady(messages?.length ?? 0);
+  }, [messages?.length, onMessagesReady]);
 
+  return (
+    <AppScreen>
+      <View style={{ flex: 1 }}>
+        {/* Header local (proche de la nav bar) */}
+        <View style={{ paddingHorizontal: 16, paddingBottom: 8 }}>
+          <Text style={{ fontSize: 18, fontWeight: "700" }}>Conversation</Text>
+        </View>
+
+        {/* Zone messages */}
         {!messages ? (
-          <Text>Chargement…</Text>
+          <View style={{ paddingHorizontal: 16 }}>
+            <Text>Chargement…</Text>
+          </View>
         ) : (
           <FlatList
-            {...listProps}
+            ref={listRef}
             style={{ flex: 1 }}
             data={messages}
             keyExtractor={(m) => String(m._id)}
-            contentContainerStyle={{
-              paddingBottom: inputBarHeight + 12, // ✅ exact, donc max messages visibles
-            }}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="interactive"
+            contentContainerStyle={{ paddingHorizontal: 16 }}
             renderItem={({ item }) => (
               <View style={{ paddingVertical: 8, borderBottomWidth: 1 }}>
                 <Text style={{ fontWeight: item.type === "system" ? "700" : "400" }}>
@@ -138,21 +145,13 @@ export default function ThreadScreen() {
           />
         )}
 
-        {/* Barre d’écriture */}
-        <View
-          onLayout={(e) => setInputBarHeight(e.nativeEvent.layout.height)}
-          style={{
-            borderTopWidth: 1,
-            paddingTop: 10,
-            marginTop: 10,
-            paddingBottom: 10,
-          }}
-        >
+        {/* Barre d’écriture (DANS LE FLOW NORMAL) */}
+        <View style={{ borderTopWidth: 1, padding: 10, paddingHorizontal: 16 }}>
           <TextInput
             placeholder="Écris un message…"
             value={draft}
             onChangeText={setDraft}
-            onFocus={onInputFocus}
+            onFocus={() => setTimeout(() => scrollToBottom(true), 80)}
             style={{
               borderWidth: 1,
               borderRadius: 12,

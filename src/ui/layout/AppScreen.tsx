@@ -2,28 +2,21 @@ import { useHeaderHeight } from "@react-navigation/elements";
 import { ReactNode } from "react";
 import { KeyboardAvoidingView, Platform } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useKeyboardVisible } from "../hooks/useKeyboardVisible";
 
-export function AppScreen({
-  children,
-  withBottomSafeArea = true,
-}: {
-  children: ReactNode;
-  withBottomSafeArea?: boolean;
-}) {
+/**
+ * Pattern stable Expo Router (header iOS gère déjà le TOP safe area)
+ * => on garde seulement le BOTTOM safe area
+ * => KeyboardAvoidingView pousse correctement l’UI au-dessus du clavier
+ */
+export function AppScreen({ children }: { children: ReactNode }) {
   const headerHeight = useHeaderHeight?.() ?? 0;
-  const keyboardVisible = useKeyboardVisible();
-
-  // ✅ Quand le clavier est visible : PAS de safe area bottom (sinon gros trou)
-  const edges: ("top" | "bottom")[] =
-    withBottomSafeArea && !keyboardVisible ? ["top", "bottom"] : ["top"];
 
   return (
-    <SafeAreaView style={{ flex: 1 }} edges={edges}>
+    <SafeAreaView style={{ flex: 1 }} edges={["bottom"]}>
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
-        // ✅ très important : headerHeight seulement (PAS + insets.top)
+        // ✅ offset = header seulement (pas de insets.top)
         keyboardVerticalOffset={Platform.OS === "ios" ? headerHeight : 0}
       >
         {children}

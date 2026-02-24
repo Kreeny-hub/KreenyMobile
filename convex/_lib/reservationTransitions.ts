@@ -1,6 +1,7 @@
 import { ConvexError } from "convex/values";
 import type { Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
+import type { ReservationStatus } from "./enums";
 import { emitReservationEvent, type ReservationEventType } from "./reservationEvents";
 import { assertReservationTransition } from "./reservationStateMachine";
 
@@ -11,7 +12,7 @@ export async function transitionReservationStatus(opts: {
   ownerUserId: string;
   actorUserId: string;
 
-  nextStatus: string;
+  nextStatus: ReservationStatus;
   eventType: ReservationEventType;
 
   patch?: Record<string, any>;

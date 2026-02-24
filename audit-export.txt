@@ -1,0 +1,1835 @@
+
+
+===== FILE: app.json =====
+
+{
+  "expo": {
+    "name": "kreeny",
+    "slug": "kreeny",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "kreeny",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/images/android-icon-foreground.png",
+        "backgroundImage": "./assets/images/android-icon-background.png",
+        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "output": "static",
+      "favicon": "./assets/images/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "backgroundColor": "#ffffff",
+          "dark": {
+            "backgroundColor": "#000000"
+          }
+        }
+      ],
+      "expo-secure-store"
+    ],
+    "experiments": {
+      "typedRoutes": false,
+      "reactCompiler": true
+    }
+  }
+}
+
+
+
+===== FILE: convex/auth.ts =====
+
+import { createClient, type GenericCtx } from "@convex-dev/better-auth";
+import { convex } from "@convex-dev/better-auth/plugins";
+import { betterAuth, type BetterAuthOptions } from "better-auth/minimal";
+import { expo } from "@better-auth/expo";
+import { components } from "./_generated/api";
+import type { DataModel } from "./_generated/dataModel";
+import { query } from "./_generated/server";
+import authConfig from "./auth.config";
+
+export const authComponent = createClient<DataModel>(components.betterAuth);
+
+export const createAuth = (ctx: GenericCtx<DataModel>) => {
+  return betterAuth({
+    trustedOrigins: [
+  "kreeny://",
+  // Dev Expo Go (réseau local)
+  "exp://",
+  "exp://**",
+  "exp://192.168.*.*:*/**",
+],
+
+    database: authComponent.adapter(ctx),
+
+    emailAndPassword: {
+      enabled: true,
+      requireEmailVerification: false,
+    },
+
+    plugins: [expo(), convex({ authConfig })],
+  } satisfies BetterAuthOptions);
+};
+
+export const getCurrentUser = query({
+  args: {},
+  handler: async (ctx) => {
+    try {
+      return await authComponent.getAuthUser(ctx);
+    } catch {
+      // Pas connecté (ou token pas encore attaché) => on renvoie null, jamais d'erreur
+      return null;
+    }
+  },
+});
+
+
+
+===== FILE: convex/chat.ts =====
+
+import { ConvexError, v } from "convex/values";
+import { mutation, query } from "./_generated/server";
+import { authComponent } from "./auth";
+
+function userKey(user: any) {
+  return String(user.userId ?? user.email ?? user._id);
+}
+
+export const getThreadByReservation = query({
+  args: { reservationId: v.id("reservations") },
+  handler: async (ctx, args) => {
+    const user = await authComponent.getAuthUser(ctx);
+    if (!user) throw new ConvexError("Unauthenticated");
+    const me = userKey(user);
+
+    const thread = await ctx.db
+      .query("threads")
+      .withIndex("by_reservation", (q) => q.eq("reservationId", args.reservationId))
+      .unique();
+
+    if (!thread) return null;
+
+    // ✅ sécurité: seuls participants
+    if (thread.renterUserId !== me && thread.ownerUserId !== me) {
+      throw new ConvexError("Forbidden");
+    }
+
+    return thread;
+  },
+});
+
+export const listMessages = query({
+  args: { threadId: v.id("threads"), limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const user = await authComponent.getAuthUser(ctx);
+    if (!user) throw new ConvexError("Unauthenticated");
+    const me = userKey(user);
+
+    const thread = await ctx.db.get(args.threadId);
+    if (!thread) throw new ConvexError("ThreadNotFound");
+    if (thread.renterUserId !== me && thread.ownerUserId !== me) {
+      throw new ConvexError("Forbidden");
+    }
+
+    const limit = args.limit ?? 100;
+
+    return await ctx.db
+      .query("messages")
+      .withIndex("by_thread", (q) => q.eq("threadId", args.threadId))
+      .order("asc")
+      .take(limit);
+  },
+});
+
+export const listMyThreads = query({
+  args: {},
+  handler: async (ctx) => {
+    const user = await authComponent.getAuthUser(ctx);
+    if (!user) throw new ConvexError("Unauthenticated");
+    const me = userKey(user);
+
+    // Threads où je suis locataire
+    const asRenter = await ctx.db
+      .query("threads")
+      .withIndex("by_renter", (q) => q.eq("renterUserId", me))
+      .order("desc")
+      .take(100);
+
+    // Threads où je suis loueur
+    const asOwner = await ctx.db
+      .query("threads")
+      .withIndex("by_owner", (q) => q.eq("ownerUserId", me))
+      .order("desc")
+      .take(100);
+
+    // Merge + dédoublonnage (au cas où)
+    const map = new Map<string, (typeof asRenter)[number]>();
+    for (const t of [...asRenter, ...asOwner]) map.set(String(t._id), t);
+
+    // Tri par date création (plus récent d’abord)
+    return Array.from(map.values()).sort((a, b) => {
+      const aTime = a.lastMessageAt ?? a.createdAt;
+      const bTime = b.lastMessageAt ?? b.createdAt;
+      return bTime - aTime;
+    });
+  },
+});
+
+export const getThread = query({
+  args: { threadId: v.id("threads") },
+  handler: async (ctx, args) => {
+    const user = await authComponent.getAuthUser(ctx);
+    if (!user) throw new ConvexError("Unauthenticated");
+    const me = userKey(user);
+
+    const thread = await ctx.db.get(args.threadId);
+    if (!thread) throw new ConvexError("ThreadNotFound");
+
+    if (thread.renterUserId !== me && thread.ownerUserId !== me) {
+      throw new ConvexError("Forbidden");
+    }
+
+    return thread;
+  },
+});
+
+export const refreshThreadActions = mutation({
+  args: { threadId: v.id("threads") },
+  handler: async (ctx, args) => {
+    const user = await authComponent.getAuthUser(ctx);
+    if (!user) throw new ConvexError("Unauthenticated");
+    const me = userKey(user);
+
+    const thread = await ctx.db.get(args.threadId);
+    if (!thread) throw new ConvexError("ThreadNotFound");
+
+    // ✅ sécurité : seulement owner/renter du thread
+    if (thread.renterUserId !== me && thread.ownerUserId !== me) {
+      throw new ConvexError("Forbidden");
+    }
+
+    const reservation = await ctx.db.get(thread.reservationId);
+    if (!reservation) throw new ConvexError("ReservationNotFound");
+
+    const key = `actions:${String(thread.reservationId)}`;
+    const now = Date.now();
+
+    // cherche le message "actions" existant
+    const existing = await ctx.db
+      .query("messages")
+      .withIndex("by_eventKey", (q) => q.eq("eventKey", key))
+      .unique();
+
+    // calcule les actions selon le statut
+    let actions: { label: string; route: string }[] = [];
+    let visibility: "all" | "renter" | "owner" = "all";
+    let text = "Actions disponibles";
+
+    if (reservation.status === "accepted_pending_payment") {
+      actions = [{ label: "Payer maintenant", route: "action:PAY_NOW" }];
+      visibility = "renter";
+      text = "Paiement requis";
+    } else if (reservation.status === "pickup_pending") {
+      actions = [{ label: "Faire le constat départ", route: "action:DO_CHECKIN" }];
+      visibility = "all";
+      text = "Constat départ requis";
+    } else if (reservation.status === "dropoff_pending") {
+      actions = [{ label: "Faire le constat retour", route: "action:DO_CHECKOUT" }];
+      visibility = "all";
+      text = "Constat retour requis";
+    } else if (
+      reservation.status === "completed" ||
+      reservation.status === "cancelled" ||
+      reservation.status === "rejected"
+    ) {
+      actions = [];
+      visibility = "all";
+      text = "Aucune action";
+    }
+
+    if (!existing) {
+      // ✅ création 1 seule fois
+      await ctx.db.insert("messages", {
+        threadId: thread._id,
+        reservationId: thread.reservationId,
+        type: "actions",
+        text,
+        createdAt: now,
+        eventKey: key,
+        actions,
+        visibility,
+      });
+      return { ok: true, created: true };
+    }
+
+    // ✅ mise à jour: patch SEULEMENT des champs modifiables
+    await ctx.db.patch(existing._id, {
+      text,
+      actions,
+      visibility,
+      // ✅ on ne touche PAS createdAt : le message "actions" reste stable
+    });
+
+    return { ok: true, created: false };
+  },
+});
+
+
+
+
+===== FILE: convex/chatActions.ts =====
+
+import { ConvexError, v } from "convex/values";
+import { mutation } from "./_generated/server";
+import { getRoleOrThrow, loadReservationOrThrow } from "./_lib/reservationGuards";
+import { transitionReservationStatus } from "./_lib/reservationTransitions";
+import { authComponent } from "./auth";
+
+type ActionResult =
+  | { ok: true }
+  | {
+      ok: false;
+      code:
+        | "Forbidden"
+        | "InvalidStatus"
+        | "PaymentNotInitialized"
+        | "UnknownAction"
+        | "OnlyRenterCanPay";
+    };
+
+export const runChatAction = mutation({
+  args: {
+    threadId: v.id("threads"),
+    action: v.string(), // "PAY_NOW" | "DEV_MARK_PAID" | "DEV_DROPOFF_PENDING" | ...
+  },
+  handler: async (ctx, args): Promise<ActionResult> => {
+    const user = await authComponent.getAuthUser(ctx);
+    if (!user) throw new ConvexError("Unauthenticated");
+    const me = String(user.userId ?? user.email ?? user._id);
+
+    const thread = await ctx.db.get(args.threadId);
+    if (!thread) throw new ConvexError("ThreadNotFound");
+
+    // ✅ sécurité: participant seulement
+    if (thread.renterUserId !== me && thread.ownerUserId !== me) {
+      return { ok: false, code: "Forbidden" };
+    }
+
+    const reservation = await loadReservationOrThrow(ctx, thread.reservationId);
+    const role = getRoleOrThrow(reservation, me);
+
+    switch (args.action) {
+      /**
+       * PAY_NOW
+       * - locataire uniquement
+       * - uniquement si accepted_pending_payment
+       * - ne change pas le status, seulement paymentStatus
+       */
+      case "PAY_NOW": {
+        if (role !== "renter") {
+          return { ok: false, code: "OnlyRenterCanPay" };
+        }
+
+        if (reservation.status !== "accepted_pending_payment") {
+          return { ok: false, code: "InvalidStatus" };
+        }
+
+        await transitionReservationStatus({
+          ctx,
+          reservationId: reservation._id,
+          renterUserId: reservation.renterUserId,
+          ownerUserId: String(reservation.ownerUserId ?? ""),
+          actorUserId: me,
+
+          // ✅ statut inchangé
+          nextStatus: reservation.status,
+          eventType: "payment_initialized",
+
+          // ✅ patch paiement
+          patch: { paymentStatus: "requires_action" },
+
+          idempotencyKey: `res:${String(reservation._id)}:payment_initialized`,
+        });
+
+        return { ok: true };
+      }
+
+      /**
+       * DEV_MARK_PAID
+       * - locataire uniquement
+       * - accepted_pending_payment
+       * - paymentStatus requires_action
+       */
+      case "DEV_MARK_PAID": {
+        if (role !== "renter") return { ok: false, code: "Forbidden" };
+
+        if (reservation.status !== "accepted_pending_payment") {
+          return { ok: false, code: "InvalidStatus" };
+        }
+
+        if (reservation.paymentStatus !== "requires_action") {
+          return { ok: false, code: "PaymentNotInitialized" };
+        }
+
+        await transitionReservationStatus({
+          ctx,
+          reservationId: reservation._id,
+          renterUserId: reservation.renterUserId,
+          ownerUserId: String(reservation.ownerUserId ?? ""),
+          actorUserId: me,
+
+          nextStatus: "pickup_pending",
+          eventType: "payment_captured",
+          patch: { paymentStatus: "captured" },
+
+          idempotencyKey: `res:${String(reservation._id)}:payment_captured`,
+        });
+
+        return { ok: true };
+      }
+
+      /**
+       * DEV_DROPOFF_PENDING
+       * - owner OU renter
+       * - uniquement si in_progress
+       */
+      case "DEV_DROPOFF_PENDING": {
+        if (reservation.status !== "in_progress") {
+          return { ok: false, code: "InvalidStatus" };
+        }
+
+        await transitionReservationStatus({
+          ctx,
+          reservationId: reservation._id,
+          renterUserId: reservation.renterUserId,
+          ownerUserId: String(reservation.ownerUserId ?? ""),
+          actorUserId: me,
+
+          nextStatus: "dropoff_pending",
+          eventType: "dropoff_pending",
+
+          idempotencyKey: `phase:${String(reservation._id)}:dropoff_pending`,
+        });
+
+        return { ok: true };
+      }
+
+      default:
+        return { ok: false, code: "UnknownAction" };
+    }
+  },
+});
+
+
+===== FILE: convex/chatSend.ts =====
+
+import { ConvexError, v } from "convex/values";
+import { mutation } from "./_generated/server";
+import { authComponent } from "./auth";
+
+function userKey(user: any) {
+  return String(user.userId ?? user.email ?? user._id);
+}
+
+export const sendMessage = mutation({
+  args: {
+    threadId: v.id("threads"),
+    text: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const user = await authComponent.getAuthUser(ctx);
+    if (!user) throw new ConvexError("Unauthenticated");
+    const me = userKey(user);
+
+    const thread = await ctx.db.get(args.threadId);
+    if (!thread) throw new ConvexError("ThreadNotFound");
+
+    // sécurité: seuls les 2 participants peuvent écrire
+    if (thread.renterUserId !== me && thread.ownerUserId !== me) {
+      throw new ConvexError("Forbidden");
+    }
+
+    const text = args.text.trim();
+    if (!text) throw new ConvexError("EmptyMessage");
+    if (text.length > 1000) throw new ConvexError("MessageTooLong");
+
+    const now = Date.now();
+
+    const messageId = await ctx.db.insert("messages", {
+      threadId: thread._id,
+      reservationId: thread.reservationId,
+      type: "user",
+      text,
+      createdAt: now,
+    });
+
+    await ctx.db.patch(thread._id, { lastMessageAt: now });
+
+    return { ok: true, messageId };
+  },
+});
+
+
+===== FILE: convex/crons.ts =====
+
+import { cronJobs } from "convex/server";
+import { api } from "./_generated/api";
+
+const crons = cronJobs();
+
+// ✅ Toutes les 5 minutes : expire les réservations acceptées mais non payées
+crons.interval(
+  "expire unpaid reservations",
+  { minutes: 5 },
+  api.reservations.expireUnpaidReservations,
+  {}
+);
+
+export default crons;
+
+
+===== FILE: convex/files.ts =====
+
+import { mutation } from "./_generated/server";
+
+export const generateUploadUrl = mutation(async (ctx) => {
+  return await ctx.storage.generateUploadUrl();
+});
+
+
+===== FILE: convex/reservations.ts =====
+
+import { ConvexError, v } from "convex/values";
+import { mutation, query } from "./_generated/server";
+import { emitReservationEvent } from "./_lib/reservationEvents";
+import {
+  assertRole,
+  assertStatus,
+  getRoleOrThrow,
+  loadReservationOrThrow,
+} from "./_lib/reservationGuards";
+import { transitionReservationStatus } from "./_lib/reservationTransitions";
+import { acquireVehicleLocks, releaseVehicleLocks } from "./_lib/vehicleLocks";
+import { authComponent } from "./auth";
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+function assertIsoDate(value: string) {
+  if (!ISO_DATE.test(value)) throw new ConvexError("InvalidDateFormat");
+}
+
+function assertStartBeforeEnd(startDate: string, endDate: string) {
+  if (endDate <= startDate) throw new ConvexError("InvalidDateRange");
+}
+
+function userKey(user: any) {
+  return String(user.userId ?? user.email ?? user._id);
+}
+
+const BLOCKING_STATUSES = new Set([
+  "requested",
+  "accepted_pending_payment",
+  "pickup_pending",
+  "in_progress",
+  "dropoff_pending",
+  "confirmed",
+]);
+
+export const getReservationsForVehicle = query({
+  args: { vehicleId: v.id("vehicles") },
+  handler: async (ctx, args) => {
+    const reservations = await ctx.db
+      .query("reservations")
+      .filter((q) => q.eq(q.field("vehicleId"), args.vehicleId))
+      .collect();
+
+    return reservations
+      .filter((r) => BLOCKING_STATUSES.has(r.status))
+      .map((r) => ({
+        startDate: r.startDate,
+        endDate: r.endDate,
+        status: r.status,
+      }));
+  },
+});
+
+export const listReservationsForOwnerVehicle = query({
+  args: { vehicleId: v.id("vehicles") },
+  handler: async (ctx, args) => {
+    const user = await authComponent.getAuthUser(ctx);
+    if (!user) throw new ConvexError("Unauthenticated");
+    const ownerUserId = userKey(user);
+
+    const vehicle = await ctx.db.get(args.vehicleId);
+    if (!vehicle) throw new ConvexError("VehicleNotFound");
+    if (String((vehicle as any).ownerUserId) !== ownerUserId) {
+      throw new ConvexError("Forbidden");
+    }
+
+    return await ctx.db
+      .query("reservations")
+      .filter((q) => q.eq(q.field("vehicleId"), args.vehicleId))
+      .order("desc")
+      .take(50);
+  },
+});
+
+export const listMyReservations = query({
+  args: {},
+  handler: async (ctx) => {
+    const user = await authComponent.getAuthUser(ctx);
+    if (!user) throw new ConvexError("Unauthenticated");
+    const renterUserId = userKey(user);
+
+    return await ctx.db
+      .query("reservations")
+      .filter((q) => q.eq(q.field("renterUserId"), renterUserId))
+      .order("desc")
+      .take(50);
+  },
+});
+
+export const listMyReservationsWithVehicle = query({
+  args: {},
+  handler: async (ctx) => {
+    const user = await authComponent.getAuthUser(ctx);
+    if (!user) throw new ConvexError("Unauthenticated");
+    const renterUserId = userKey(user);
+
+    const reservations = await ctx.db
+      .query("reservations")
+      .filter((q) => q.eq(q.field("renterUserId"), renterUserId))
+      .order("desc")
+      .take(50);
+
+    const results: any[] = [];
+    for (const r of reservations) {
+      const vehicle = await ctx.db.get(r.vehicleId);
+      results.push({ reservation: r, vehicle });
+    }
+
+    return results;
+  },
+});
+
+/** OWNER: accepte */
+export const acceptReservation = mutation({
+  args: { reservationId: v.id("reservations") },
+  handler: async (ctx, args) => {
+    const user = await authComponent.getAuthUser(ctx);
+    if (!user) throw new ConvexError("Unauthenticated");
+    const ownerUserId = userKey(user);
+
+    const r = await loadReservationOrThrow(ctx, args.reservationId);
+
+    const role = getRoleOrThrow(r, ownerUserId);
+    assertRole(role, ["owner"]);
+    assertStatus(r, ["requested"]);
+
+    await transitionReservationStatus({
+      ctx,
+      reservationId: r._id,
+      renterUserId: r.renterUserId,
+      ownerUserId: ownerUserId,
+      actorUserId: ownerUserId,
+      nextStatus: "accepted_pending_payment",
+      eventType: "reservation_accepted",
+      patch: { acceptedAt: Date.now() },
+      idempotencyKey: `res:${String(r._id)}:reservation_accepted`,
+    });
+
+    return { ok: true };
+  },
+});
+
+/** OWNER: rejette -> ✅ libère locks */
+export const rejectReservation = mutation({
+  args: { reservationId: v.id("reservations") },
+  handler: async (ctx, args) => {
+    const user = await authComponent.getAuthUser(ctx);
+    if (!user) throw new ConvexError("Unauthenticated");
+    const ownerUserId = userKey(user);
+
+    const r = await loadReservationOrThrow(ctx, args.reservationId);
+
+    const role = getRoleOrThrow(r, ownerUserId);
+    assertRole(role, ["owner"]);
+    assertStatus(r, ["requested"]);
+
+    await transitionReservationStatus({
+      ctx,
+      reservationId: r._id,
+      renterUserId: r.renterUserId,
+      ownerUserId: ownerUserId,
+      actorUserId: ownerUserId,
+      nextStatus: "rejected",
+      eventType: "reservation_rejected",
+      idempotencyKey: `res:${String(r._id)}:reservation_rejected`,
+    });
+
+    // ✅ IMPORTANT: libérer locks si on rejette
+    await releaseVehicleLocks({
+      ctx,
+      vehicleId: r.vehicleId,
+      reservationId: r._id,
+      startDate: r.startDate,
+      endDate: r.endDate,
+    });
+
+    return { ok: true };
+  },
+});
+
+/** RENTER: init paiement (pas de changement de status) */
+export const initPayment = mutation({
+  args: { reservationId: v.id("reservations") },
+  handler: async (ctx, args) => {
+    const user = await authComponent.getAuthUser(ctx);
+    if (!user) throw new ConvexError("Unauthenticated");
+    const renterUserId = userKey(user);
+
+    const r = await loadReservationOrThrow(ctx, args.reservationId);
+
+    const role = getRoleOrThrow(r, renterUserId);
+    assertRole(role, ["renter"]);
+    assertStatus(r, ["accepted_pending_payment"]);
+
+    await transitionReservationStatus({
+      ctx,
+      reservationId: r._id,
+      renterUserId: r.renterUserId,
+      ownerUserId: String(r.ownerUserId ?? ""),
+      actorUserId: renterUserId,
+      nextStatus: r.status,
+      eventType: "payment_initialized",
+      patch: { paymentStatus: "requires_action" },
+      idempotencyKey: `res:${String(r._id)}:payment_initialized`,
+    });
+
+    return {
+      ok: true,
+      currency: r.currency ?? "MAD",
+      totalAmount: r.totalAmount ?? 0,
+      depositAmount: r.depositAmount ?? 0,
+    };
+  },
+});
+
+/** RENTER: paiement capturé (DEV) */
+export const markReservationPaid = mutation({
+  args: { reservationId: v.id("reservations") },
+  handler: async (ctx, args) => {
+    const user = await authComponent.getAuthUser(ctx);
+    if (!user) throw new ConvexError("Unauthenticated");
+    const renterUserId = userKey(user);
+
+    const r = await loadReservationOrThrow(ctx, args.reservationId);
+
+    const role = getRoleOrThrow(r, renterUserId);
+    assertRole(role, ["renter"]);
+
+    assertStatus(r, ["accepted_pending_payment"]);
+    if (r.paymentStatus !== "requires_action") throw new ConvexError("PaymentNotInitialized");
+
+    await transitionReservationStatus({
+      ctx,
+      reservationId: r._id,
+      renterUserId: r.renterUserId,
+      ownerUserId: String(r.ownerUserId ?? ""),
+      actorUserId: renterUserId,
+      nextStatus: "pickup_pending",
+      eventType: "payment_captured",
+      patch: { paymentStatus: "captured" },
+      idempotencyKey: `res:${String(r._id)}:payment_captured`,
+    });
+
+    return { ok: true };
+  },
+});
+
+/** RENTER: annule -> ✅ libère locks */
+export const cancelReservation = mutation({
+  args: { reservationId: v.id("reservations") },
+  handler: async (ctx, args) => {
+    const user = await authComponent.getAuthUser(ctx);
+    if (!user) throw new ConvexError("Unauthenticated");
+    const renterUserId = userKey(user);
+
+    const r = await loadReservationOrThrow(ctx, args.reservationId);
+
+    const role = getRoleOrThrow(r, renterUserId);
+    assertRole(role, ["renter"]);
+
+    const cancellable = new Set(["requested", "accepted_pending_payment", "pickup_pending"]);
+    assertStatus(r, Array.from(cancellable));
+
+    await transitionReservationStatus({
+      ctx,
+      reservationId: r._id,
+      renterUserId: r.renterUserId,
+      ownerUserId: String(r.ownerUserId ?? ""),
+      actorUserId: renterUserId,
+      nextStatus: "cancelled",
+      eventType: "reservation_cancelled",
+      idempotencyKey: `res:${String(r._id)}:reservation_cancelled`,
+    });
+
+    // ✅ IMPORTANT: libérer locks si on annule
+    await releaseVehicleLocks({
+      ctx,
+      vehicleId: r.vehicleId,
+      reservationId: r._id,
+      startDate: r.startDate,
+      endDate: r.endDate,
+    });
+
+    return { ok: true };
+  },
+});
+
+/** DEV: in_progress -> dropoff_pending */
+export const markDropoffPending = mutation({
+  args: { reservationId: v.id("reservations") },
+  handler: async (ctx, args) => {
+    const user = await authComponent.getAuthUser(ctx);
+    if (!user) throw new ConvexError("Unauthenticated");
+    const me = userKey(user);
+
+    const r = await ctx.db.get(args.reservationId);
+    if (!r) throw new ConvexError("ReservationNotFound");
+
+    if (r.renterUserId !== me && r.ownerUserId !== me) throw new ConvexError("Forbidden");
+    if (r.status !== "in_progress") throw new ConvexError("InvalidStatus");
+
+    await transitionReservationStatus({
+      ctx,
+      reservationId: r._id,
+      renterUserId: r.renterUserId,
+      ownerUserId: String(r.ownerUserId ?? ""),
+      actorUserId: me,
+      nextStatus: "dropoff_pending",
+      eventType: "dropoff_pending",
+      idempotencyKey: `phase:${String(r._id)}:dropoff_pending`,
+    });
+
+    return { ok: true };
+  },
+});
+
+/** CREATE reservation + locks + rollback si problème */
+export const createReservation = mutation({
+  args: {
+    vehicleId: v.id("vehicles"),
+    startDate: v.string(),
+    endDate: v.string(),
+  },
+  handler: async (ctx, args) => {
+    assertIsoDate(args.startDate);
+    assertIsoDate(args.endDate);
+    assertStartBeforeEnd(args.startDate, args.endDate);
+
+    const user = await authComponent.getAuthUser(ctx);
+    if (!user) throw new ConvexError("Unauthenticated");
+    const renterUserId = userKey(user);
+
+    const cooldownMs = 60 * 60 * 1000;
+
+    const existingSamePair = await ctx.db
+      .query("reservations")
+      .filter((q) =>
+        q.and(q.eq(q.field("vehicleId"), args.vehicleId), q.eq(q.field("renterUserId"), renterUserId))
+      )
+      .order("desc")
+      .take(1);
+
+    const last = existingSamePair[0];
+    if (last) {
+      if (BLOCKING_STATUSES.has(last.status)) throw new ConvexError("AlreadyRequested");
+      if (
+        (last.status === "cancelled" || last.status === "rejected") &&
+        Date.now() - last.createdAt < cooldownMs
+      ) {
+        throw new ConvexError("CooldownActive");
+      }
+    }
+
+    const vehicle = await ctx.db.get(args.vehicleId);
+    if (!vehicle) throw new ConvexError("VehicleNotFound");
+
+    const ownerUserId =
+      (vehicle as any).ownerUserId ?? (vehicle as any).ownerId ?? (vehicle as any).owner ?? null;
+    if (!ownerUserId) throw new ConvexError("VehicleMissingOwner");
+    if (String(ownerUserId) === renterUserId) throw new ConvexError("CannotRentOwnVehicle");
+
+    const depositAmount = (vehicle as any).depositSelected ?? (vehicle as any).depositMin ?? 3000;
+
+    // (on garde ton overlap check en “filet” MVP)
+    const existing = await ctx.db
+      .query("reservations")
+      .filter((q) => q.eq(q.field("vehicleId"), args.vehicleId))
+      .collect();
+
+    const overlaps = existing.some((r: any) => {
+      if (!BLOCKING_STATUSES.has(r.status)) return false;
+      return !(args.endDate < r.startDate || args.startDate > r.endDate);
+    });
+    if (overlaps) throw new ConvexError("VehicleUnavailable");
+
+    const days = Math.max(
+      0,
+      Math.round(
+        (new Date(args.endDate).getTime() - new Date(args.startDate).getTime()) / 86400000
+      )
+    );
+
+    const totalAmount = days * Number((vehicle as any).pricePerDay ?? 0);
+    const commissionAmount = 0;
+
+    // ✅ on crée la réservation, puis locks, avec rollback si besoin
+    const reservationId = await ctx.db.insert("reservations", {
+      vehicleId: args.vehicleId,
+      renterUserId,
+      ownerUserId: String(ownerUserId),
+      startDate: args.startDate,
+      endDate: args.endDate,
+      status: "requested",
+      createdAt: Date.now(),
+      version: 1,
+
+      depositAmount,
+      currency: "MAD",
+      totalAmount,
+      commissionAmount,
+      paymentStatus: "unpaid",
+    });
+
+    try {
+      await acquireVehicleLocks({
+        ctx,
+        vehicleId: args.vehicleId,
+        reservationId,
+        startDate: args.startDate,
+        endDate: args.endDate,
+      });
+    } catch (e) {
+      // rollback: on supprime la réservation si on n'arrive pas à locker
+      await ctx.db.delete(reservationId);
+      throw e;
+    }
+
+    await emitReservationEvent({
+      ctx,
+      reservationId,
+      renterUserId,
+      ownerUserId: String(ownerUserId),
+      type: "reservation_created",
+      actorUserId: renterUserId,
+    });
+
+    return { reservationId };
+  },
+});
+
+/** Backfills */
+export const backfillOwnerUserIdForSeeds = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const reservations = await ctx.db.query("reservations").collect();
+
+    for (const r of reservations) {
+      if ((r as any).ownerUserId) continue;
+
+      const vehicle = await ctx.db.get(r.vehicleId);
+      const ownerUserId = (vehicle as any)?.ownerUserId ?? "seed-owner";
+
+      await ctx.db.patch(r._id, { ownerUserId: String(ownerUserId) });
+    }
+
+    return { ok: true };
+  },
+});
+
+export const backfillReservationDeposits = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const reservations = await ctx.db.query("reservations").collect();
+
+    for (const r of reservations) {
+      if ((r as any).depositAmount) continue;
+
+      const vehicle = await ctx.db.get(r.vehicleId);
+      const depositAmount =
+        (vehicle as any)?.depositSelected ?? (vehicle as any)?.depositMin ?? 3000;
+
+      await ctx.db.patch(r._id, { depositAmount });
+    }
+
+    return { ok: true };
+  },
+});
+
+export const getMyRoleForReservation = query({
+  args: { reservationId: v.id("reservations") },
+  handler: async (ctx, args) => {
+    const user = await authComponent.getAuthUser(ctx);
+    if (!user) throw new ConvexError("Unauthenticated");
+
+    const me = userKey(user);
+
+    const r = await ctx.db.get(args.reservationId);
+    if (!r) throw new ConvexError("ReservationNotFound");
+
+    if (r.ownerUserId === me) return "owner";
+    if (r.renterUserId === me) return "renter";
+
+    throw new ConvexError("Forbidden");
+  },
+});
+
+/**
+ * DEV / maintenance:
+ * annule les réservations acceptées mais jamais payées
+ */
+export const expireUnpaidReservations = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    const ttlMs = 30 * 60 * 1000; // 30 minutes
+
+    const reservations = await ctx.db
+      .query("reservations")
+      .filter((q) => q.eq(q.field("status"), "accepted_pending_payment"))
+      .collect();
+
+    let count = 0;
+
+    for (const r of reservations) {
+      const acceptedAt = (r as any).acceptedAt ?? r.createdAt;
+      if (now - acceptedAt < ttlMs) continue;
+
+      // 1) annuler
+      await transitionReservationStatus({
+        ctx,
+        reservationId: r._id,
+        renterUserId: r.renterUserId,
+        ownerUserId: String(r.ownerUserId ?? ""),
+        actorUserId: "system",
+        nextStatus: "cancelled",
+        eventType: "reservation_cancelled",
+        idempotencyKey: `expire:${String(r._id)}`,
+        payload: { reason: "payment_timeout" },
+      });
+
+      // 2) libérer les dates
+      await releaseVehicleLocks({
+        ctx,
+        vehicleId: r.vehicleId,
+        reservationId: r._id,
+        startDate: r.startDate,
+        endDate: r.endDate,
+      });
+
+      count++;
+    }
+
+    return { ok: true, expired: count };
+  },
+});
+
+
+===== FILE: convex/schema.ts =====
+
+import { defineSchema, defineTable } from "convex/server";
+import { v } from "convex/values";
+
+export default defineSchema({
+  vehicles: defineTable({
+    title: v.string(),
+    pricePerDay: v.number(),
+    city: v.string(),
+    imageUrls: v.array(v.string()),
+    ownerId: v.optional(v.id("users")),
+    ownerUserId: v.optional(v.string()),
+    createdAt: v.number(),
+    isSeed: v.optional(v.boolean()),
+
+    // ✅ RISK layer (optionnel le temps du backfill)
+    depositMin: v.optional(v.number()),
+    depositMax: v.optional(v.number()),
+    depositSelected: v.optional(v.number()),
+  }),
+
+  reservations: defineTable({
+    vehicleId: v.id("vehicles"),
+    renterUserId: v.string(),
+    ownerUserId: v.optional(v.string()),
+    startDate: v.string(),
+    endDate: v.string(),
+    status: v.string(),
+    createdAt: v.number(),
+    version: v.optional(v.number()),
+    acceptedAt: v.optional(v.number()),
+    depositStatus: v.optional(v.string()), // "unheld" | "held" | "released" | "failed"
+    depositHoldRef: v.optional(v.string()), // futur Stripe hold id
+
+    // ✅ caution figée sur la réservation (optionnel le temps du backfill)
+    depositAmount: v.optional(v.number()),
+
+    // ✅ paiement (préparation Stripe) — optionnel pour l’instant
+    currency: v.optional(v.string()), // "MAD"
+    totalAmount: v.optional(v.number()), // montant location (hors caution)
+    commissionAmount: v.optional(v.number()), // commission plateforme
+    paymentStatus: v.optional(v.string()), // "unpaid" | "requires_action" | "authorized" | "captured" | "failed" | ...
+    stripePaymentIntentId: v.optional(v.string()), // futur
+  }),
+
+  conditionReports: defineTable({
+    reservationId: v.id("reservations"),
+    phase: v.union(v.literal("checkin"), v.literal("checkout")),
+    role: v.union(v.literal("owner"), v.literal("renter")),
+
+    requiredPhotos: v.record(v.string(), v.id("_storage")), // slotKey -> storageId
+    detailPhotos: v.array(
+      v.object({
+        storageId: v.id("_storage"),
+        note: v.optional(v.string()),
+      })
+    ),
+    video360StorageId: v.optional(v.id("_storage")),
+
+    submittedByUserId: v.string(),
+    completedAt: v.number(),
+  })
+    .index("by_reservation_phase_role", ["reservationId", "phase", "role"])
+    .index("by_reservation_phase", ["reservationId", "phase"]),
+
+  threads: defineTable({
+    reservationId: v.id("reservations"),
+    renterUserId: v.string(),
+    ownerUserId: v.string(),
+    createdAt: v.number(),
+    lastMessageAt: v.optional(v.number()),
+  })
+    .index("by_reservation", ["reservationId"])
+    .index("by_renter", ["renterUserId"])
+    .index("by_owner", ["ownerUserId"]),
+
+  messages: defineTable({
+    threadId: v.id("threads"),
+    reservationId: v.id("reservations"),
+    type: v.union(v.literal("system"), v.literal("user"), v.literal("actions")),
+    text: v.string(),
+    createdAt: v.number(),
+
+    // ✅ anti-doublons (idempotence)
+    eventKey: v.optional(v.string()),
+
+    // ✅ actions simples (UI rendra des boutons)
+    actions: v.optional(
+      v.array(
+        v.object({
+          label: v.string(),
+          route: v.string(), // ex: "/profile/reservations" ou "/reservation/[id]"
+        })
+      )
+    ),
+
+    // optionnel: filtrer l’affichage selon le rôle (plus tard)
+    visibility: v.optional(v.union(v.literal("all"), v.literal("renter"), v.literal("owner"))),
+  })
+    .index("by_thread", ["threadId", "createdAt"])
+    .index("by_eventKey", ["eventKey"]),
+
+  reservationEvents: defineTable({
+    reservationId: v.id("reservations"),
+
+    // ex: "reservation_created", "payment_captured", ...
+    type: v.string(),
+
+    // qui a déclenché l'event (renter / owner / system)
+    actorUserId: v.string(),
+
+    createdAt: v.number(),
+
+    // clé d'idempotence (empêche doublons si double clic / retry réseau)
+    idempotencyKey: v.optional(v.string()),
+
+    // payload libre (phase, role, reportId, etc.)
+    payload: v.optional(v.any()),
+  })
+    .index("by_reservation", ["reservationId", "createdAt"])
+    .index("by_idempotency", ["idempotencyKey"]),
+
+  vehicleLockBuckets: defineTable({
+    vehicleId: v.id("vehicles"),
+    // map: "YYYY-MM-DD" -> reservationId
+    dates: v.record(v.string(), v.id("reservations")),
+    updatedAt: v.number(),
+  })
+    .index("by_vehicle", ["vehicleId"]),
+
+  reservationLocks: defineTable({
+    vehicleId: v.id("vehicles"),
+    date: v.string(), // "YYYY-MM-DD"
+    reservationId: v.id("reservations"),
+    createdAt: v.number(),
+  })
+
+    .index("by_reservation", ["reservationId"])
+    .index("by_vehicle_date", ["vehicleId", "date"]),
+
+
+});
+
+
+
+===== FILE: convex/vehicles.ts =====
+
+import { query, mutation } from "./_generated/server";
+import { v, ConvexError } from "convex/values";
+import { authComponent } from "./auth";
+
+function computeDepositRange(pricePerDay: number) {
+  // MVP simple, à ajuster selon ton marché
+  if (pricePerDay < 300) return { min: 2000, max: 4000 };
+  if (pricePerDay < 600) return { min: 4000, max: 7000 };
+  return { min: 7000, max: 15000 };
+}
+
+/* ======================================================
+   LISTING PUBLIC
+====================================================== */
+
+export const listVehicles = query({
+  args: {},
+  handler: async (ctx) => {
+    return await ctx.db.query("vehicles").order("desc").take(20);
+  },
+});
+
+export const getVehicleById = query({
+  args: { id: v.id("vehicles") },
+  handler: async (ctx, args) => {
+    return await ctx.db.get(args.id);
+  },
+});
+
+export const searchVehicles = query({
+  args: {
+    city: v.optional(v.string()),
+    maxPricePerDay: v.optional(v.number()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const limit = args.limit ?? 20;
+
+    let q = ctx.db.query("vehicles").order("desc");
+
+    if (args.city && args.city.trim().length > 0) {
+      q = q.filter((f) => f.eq(f.field("city"), args.city!.trim()));
+    }
+
+    const results = await q.take(limit);
+
+    if (typeof args.maxPricePerDay === "number") {
+      return results.filter((v) => v.pricePerDay <= args.maxPricePerDay!);
+    }
+
+    return results;
+  },
+});
+
+/* ======================================================
+   CREATE VEHICLE (PUBLISH)
+====================================================== */
+
+export const createVehicle = mutation({
+  args: {
+    title: v.string(),
+    city: v.string(),
+    pricePerDay: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const user = await authComponent.getAuthUser(ctx);
+    if (!user) throw new ConvexError("Unauthenticated");
+
+    const ownerUserId = String(user.userId ?? user.email ?? user._id);
+
+    // 🔒 Limite compte standard = 2 annonces
+    const existing = await ctx.db
+      .query("vehicles")
+      .filter((q) => q.eq(q.field("ownerUserId"), ownerUserId))
+      .collect();
+
+    if (existing.length >= 2) {
+      throw new ConvexError("ListingLimitReached");
+    }
+
+    const now = Date.now();
+
+    const { min, max } = computeDepositRange(args.pricePerDay);
+
+    // choix par défaut (plateforme) : le min (simple et lisible)
+    const depositSelected = min;
+
+    const id = await ctx.db.insert("vehicles", {
+      title: args.title.trim(),
+      city: args.city.trim(),
+      pricePerDay: args.pricePerDay,
+      imageUrls: [],
+      createdAt: now,
+      isSeed: false,
+      ownerUserId,
+
+      depositMin: min,
+      depositMax: max,
+      depositSelected,
+    });
+
+
+
+    return { vehicleId: id };
+  },
+});
+
+/* ======================================================
+   OWNER - MES ANNONCES + BADGE REQUEST COUNT
+====================================================== */
+
+export const listMyListingsWithRequestCount = query({
+  args: {},
+  handler: async (ctx) => {
+    const user = await authComponent.getAuthUser(ctx);
+    if (!user) throw new ConvexError("Unauthenticated");
+
+    const ownerUserId = String(user.userId ?? user.email ?? user._id);
+
+    const vehicles = await ctx.db
+      .query("vehicles")
+      .filter((q) => q.eq(q.field("ownerUserId"), ownerUserId))
+      .order("desc")
+      .take(50);
+
+    const results = [];
+
+    for (const vhl of vehicles) {
+      const requests = await ctx.db
+        .query("reservations")
+        .filter((q) =>
+          q.and(
+            q.eq(q.field("vehicleId"), vhl._id),
+            q.eq(q.field("status"), "requested")
+          )
+        )
+        .collect();
+
+      results.push({
+        vehicle: vhl,
+        requestCount: requests.length,
+      });
+    }
+
+    return results;
+  },
+});
+
+/* ======================================================
+   DEV ONLY - SEED
+====================================================== */
+
+export const backfillVehicleDeposits = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const vehicles = await ctx.db.query("vehicles").collect();
+
+    for (const vhl of vehicles) {
+      // si déjà rempli, skip
+      if ((vhl as any).depositMin && (vhl as any).depositMax && (vhl as any).depositSelected) continue;
+
+      const { min, max } = computeDepositRange((vhl as any).pricePerDay);
+      await ctx.db.patch(vhl._id, {
+        depositMin: min,
+        depositMax: max,
+        depositSelected: min,
+      });
+    }
+
+    return { ok: true };
+  },
+});
+
+export const seedVehicles = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const seeds = await ctx.db
+      .query("vehicles")
+      .filter((q) => q.eq(q.field("isSeed"), true))
+      .collect();
+
+    // ✅ ne pas appeler la variable "v" (conflit avec import { v })
+    for (const doc of seeds) {
+      await ctx.db.delete(doc._id);
+    }
+
+    const now = Date.now();
+
+    const seedData = [
+      { title: "Dacia Sandero", pricePerDay: 250, city: "Casablanca", createdAt: now },
+      { title: "Hyundai i10", pricePerDay: 220, city: "Rabat", createdAt: now + 1 },
+      { title: "Kia Picanto", pricePerDay: 200, city: "Marrakech", createdAt: now + 2 },
+    ];
+
+    for (const s of seedData) {
+      const { min, max } = computeDepositRange(s.pricePerDay);
+
+      await ctx.db.insert("vehicles", {
+        title: s.title,
+        pricePerDay: s.pricePerDay,
+        city: s.city,
+        imageUrls: [],
+        createdAt: s.createdAt,
+        isSeed: true,
+        ownerUserId: "seed-owner",
+
+        depositMin: min,
+        depositMax: max,
+        depositSelected: min,
+      });
+    }
+
+    return { ok: true };
+  },
+});
+
+
+===== FILE: package.json =====
+
+{
+  "name": "kreeny",
+  "main": "expo-router/entry",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "expo start",
+    "reset-project": "node ./scripts/reset-project.js",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web",
+    "lint": "expo lint"
+  },
+  "dependencies": {
+    "@better-auth/expo": "1.4.9",
+    "@convex-dev/better-auth": "^0.10.10",
+    "@expo/vector-icons": "^15.0.3",
+    "@hugeicons/core-free-icons": "^3.1.1",
+    "@react-navigation/bottom-tabs": "^7.4.0",
+    "@react-navigation/elements": "^2.6.3",
+    "@react-navigation/native": "^7.1.8",
+    "better-auth": "1.4.9",
+    "convex": "^1.32.0",
+    "expo": "~54.0.33",
+    "expo-constants": "~18.0.13",
+    "expo-font": "~14.0.11",
+    "expo-haptics": "~15.0.8",
+    "expo-image": "~3.0.11",
+    "expo-image-picker": "~17.0.10",
+    "expo-linking": "~8.0.11",
+    "expo-network": "~8.0.8",
+    "expo-router": "~6.0.23",
+    "expo-secure-store": "~15.0.8",
+    "expo-splash-screen": "~31.0.13",
+    "expo-status-bar": "~3.0.9",
+    "expo-symbols": "~1.0.8",
+    "expo-system-ui": "~6.0.9",
+    "expo-web-browser": "~15.0.10",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "react-native": "0.81.5",
+    "react-native-calendars": "^1.1314.0",
+    "react-native-gesture-handler": "~2.28.0",
+    "react-native-reanimated": "~4.1.1",
+    "react-native-safe-area-context": "~5.6.0",
+    "react-native-screens": "~4.16.0",
+    "react-native-web": "~0.21.0",
+    "react-native-worklets": "0.5.1"
+  },
+  "devDependencies": {
+    "@types/react": "~19.1.0",
+    "eslint": "^9.25.0",
+    "eslint-config-expo": "~10.0.0",
+    "typescript": "~5.9.2"
+  },
+  "private": true
+}
+
+
+
+===== FILE: README.md =====
+
+# Welcome to your Expo app 👋
+
+This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+
+## Get started
+
+1. Install dependencies
+
+   ```bash
+   npm install
+   ```
+
+2. Start the app
+
+   ```bash
+   npx expo start
+   ```
+
+In the output, you'll find options to open the app in a
+
+- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
+- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
+- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
+- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+
+You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+
+## Get a fresh project
+
+When you're ready, run:
+
+```bash
+npm run reset-project
+```
+
+This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+
+## Learn more
+
+To learn more about developing your project with Expo, look at the following resources:
+
+- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
+- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+
+## Join the community
+
+Join our community of developers creating universal apps.
+
+- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
+- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+
+
+
+===== FILE: src/shared/config/container.ts =====
+
+import { convex } from "./convex";
+import { createSystemRepository } from "../../infrastructure/convex/systemRepository";
+import { createVehicleRepository } from "../../infrastructure/convex/vehicleRepository";
+import { createReservationRepository } from "../../infrastructure/convex/reservationRepository";
+
+export const container = {
+  systemRepository: createSystemRepository(convex),
+  vehicleRepository: createVehicleRepository(convex),
+  reservationRepository: createReservationRepository(convex),
+};
+
+
+
+===== FILE: src\domain\repositories\ReservationRepository.ts =====
+
+import type { ReservationCreate } from "../schemas/reservation.schema";
+import type { ReservationWithVehicle } from "../schemas/reservationItem.schema";
+
+export interface ReservationRepository {
+  createReservation(input: ReservationCreate): Promise<{ reservationId: string }>;
+  listMyReservationsWithVehicle(): Promise<ReservationWithVehicle[]>;
+}
+
+
+===== FILE: src\domain\repositories\SystemRepository.ts =====
+
+export type PingResult = { ok: boolean; message: string };
+
+export interface SystemRepository {
+  ping(): Promise<PingResult>;
+}
+
+
+
+===== FILE: src\domain\repositories\VehicleRepository.ts =====
+
+import type { Vehicle } from "../schemas/vehicle.schema";
+
+export interface VehicleRepository {
+  listVehicles(): Promise<Vehicle[]>;
+  getVehicleById(id: string): Promise<Vehicle | null>;
+  seedVehicles(): Promise<void>;
+  
+  searchVehicles(params: {
+  city?: string;
+  maxPricePerDay?: number;
+  limit?: number;
+}): Promise<Vehicle[]>;
+
+}
+
+
+
+===== FILE: src\domain\schemas\reservation.schema.ts =====
+
+import { z } from "zod";
+
+export const ReservationCreateSchema = z.object({
+  vehicleId: z.string(),
+  startDate: z.string(),
+  endDate: z.string(),
+});
+
+export type ReservationCreate = z.infer<typeof ReservationCreateSchema>;
+
+
+
+===== FILE: src\domain\schemas\reservationItem.schema.ts =====
+
+import { z } from "zod";
+
+export const ReservationSchema = z.object({
+  _id: z.string(),
+  vehicleId: z.string(),
+  renterUserId: z.string(),
+  startDate: z.string(),
+  endDate: z.string(),
+  status: z.string(),
+  createdAt: z.number(),
+});
+
+export const VehicleLiteSchema = z
+  .object({
+    _id: z.string(),
+    title: z.string(),
+    city: z.string(),
+    pricePerDay: z.number(),
+  })
+  .nullable();
+
+export const ReservationWithVehicleSchema = z.object({
+  reservation: ReservationSchema,
+  vehicle: VehicleLiteSchema,
+});
+
+export type ReservationWithVehicle = z.infer<typeof ReservationWithVehicleSchema>;
+
+
+===== FILE: src\domain\schemas\vehicle.schema.ts =====
+
+import { z } from "zod";
+
+export const VehicleSchema = z.object({
+  _id: z.string(),
+  title: z.string(),
+  pricePerDay: z.number(),
+  city: z.string(),
+  imageUrls: z.array(z.string()),
+  createdAt: z.number(),
+
+  // ✅ RISK layer (optionnel le temps que tous les vieux docs soient backfill)
+  depositMin: z.number().optional(),
+  depositMax: z.number().optional(),
+  depositSelected: z.number().optional(),
+});
+
+export type Vehicle = z.infer<typeof VehicleSchema>;
+
+
+===== FILE: src\infrastructure\convex\reservationRepository.ts =====
+
+import type { ConvexReactClient } from "convex/react";
+import { api } from "../../../convex/_generated/api";
+import type { ReservationRepository } from "../../domain/repositories/ReservationRepository";
+import { ReservationCreateSchema } from "../../domain/schemas/reservation.schema";
+import { ReservationWithVehicleSchema, type ReservationWithVehicle } from "../../domain/schemas/reservationItem.schema";
+
+export function createReservationRepository(
+  convex: ConvexReactClient
+): ReservationRepository {
+  return {
+    async createReservation(input) {
+      const parsed = ReservationCreateSchema.parse(input);
+
+      const res = await convex.mutation(api.reservations.createReservation, {
+        vehicleId: parsed.vehicleId as any,
+        startDate: parsed.startDate,
+        endDate: parsed.endDate,
+      });
+
+      return { reservationId: String((res as any).reservationId) };
+    },
+
+    async listMyReservationsWithVehicle(): Promise<ReservationWithVehicle[]> {
+      const rows = await convex.query(api.reservations.listMyReservationsWithVehicle, {});
+      return rows.map((r: any) =>
+        ReservationWithVehicleSchema.parse({
+          reservation: {
+            _id: String(r.reservation?._id),
+            vehicleId: String(r.reservation?.vehicleId),
+            renterUserId: String(r.reservation?.renterUserId),
+            startDate: r.reservation?.startDate,
+            endDate: r.reservation?.endDate,
+            status: r.reservation?.status,
+            createdAt: r.reservation?.createdAt,
+          },
+          vehicle: r.vehicle
+            ? {
+              _id: String(r.vehicle._id),
+              title: r.vehicle.title,
+              city: r.vehicle.city,
+              pricePerDay: r.vehicle.pricePerDay,
+            }
+            : null,
+        })
+      );
+    },
+  };
+}
+
+
+
+===== FILE: src\infrastructure\convex\systemRepository.ts =====
+
+import type { SystemRepository, PingResult } from "../../domain/repositories/SystemRepository";
+import type { ConvexReactClient } from "convex/react";
+import { api } from "../../../convex/_generated/api";
+
+export function createSystemRepository(convex: ConvexReactClient): SystemRepository {
+  return {
+    async ping(): Promise<PingResult> {
+      return await convex.query(api.ping.ping);
+    },
+  };
+}
+
+
+
+===== FILE: src\infrastructure\convex\uploadToConvexStorage.ts =====
+
+import type { ConvexReactClient } from "convex/react";
+import { api } from "../../../convex/_generated/api";
+
+// Upload une image/vidéo locale (uri) vers Convex File Storage et retourne storageId
+export async function uploadToConvexStorage(
+  convex: ConvexReactClient,
+  file: { uri: string; mimeType: string; name: string }
+): Promise<string> {
+  const uploadUrl = await convex.mutation(api.files.generateUploadUrl, {});
+
+  const form = new FormData();
+  form.append("file", {
+    uri: file.uri,
+    type: file.mimeType,
+    name: file.name,
+  } as any);
+
+  const res = await fetch(uploadUrl, {
+    method: "POST",
+    body: form,
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Upload failed: ${res.status} ${text}`);
+  }
+
+  const json = await res.json();
+  return String(json.storageId);
+}
+
+
+===== FILE: src\infrastructure\convex\vehicleRepository.ts =====
+
+import type { ConvexReactClient } from "convex/react";
+import { api } from "../../../convex/_generated/api";
+import { VehicleSchema, type Vehicle } from "../../domain/schemas/vehicle.schema";
+import type { VehicleRepository } from "../../domain/repositories/VehicleRepository";
+
+export function createVehicleRepository(convex: ConvexReactClient): VehicleRepository {
+  return {
+    async listVehicles(): Promise<Vehicle[]> {
+      const rows = await convex.query(api.vehicles.listVehicles, {});
+      return rows.map((r: any) =>
+        VehicleSchema.parse({
+          _id: String(r._id),
+          title: r.title,
+          pricePerDay: r.pricePerDay,
+          city: r.city,
+          imageUrls: r.imageUrls ?? [],
+          createdAt: r.createdAt,
+
+          depositMin: r.depositMin,
+          depositMax: r.depositMax,
+          depositSelected: r.depositSelected,
+        })
+      );
+    },
+
+    async seedVehicles(): Promise<void> {
+      await convex.mutation(api.vehicles.seedVehicles, {});
+    },
+
+    async getVehicleById(id: string): Promise<Vehicle | null> {
+      const row = await convex.query(api.vehicles.getVehicleById, { id: id as any });
+      if (!row) return null;
+
+      const r: any = row;
+      return VehicleSchema.parse({
+        _id: String(r._id),
+        title: r.title,
+        pricePerDay: r.pricePerDay,
+        city: r.city,
+        imageUrls: r.imageUrls ?? [],
+        createdAt: r.createdAt,
+
+        depositMin: r.depositMin,
+        depositMax: r.depositMax,
+        depositSelected: r.depositSelected,
+      });
+    },
+
+    async searchVehicles(params: { city?: string; maxPricePerDay?: number; limit?: number }): Promise<Vehicle[]> {
+      const rows = await convex.query(api.vehicles.searchVehicles, {
+        city: params.city,
+        maxPricePerDay: params.maxPricePerDay,
+        limit: params.limit ?? 20,
+      });
+
+      return rows.map((r: any) =>
+        VehicleSchema.parse({
+          _id: String(r._id),
+          title: r.title,
+          pricePerDay: r.pricePerDay,
+          city: r.city,
+          imageUrls: r.imageUrls ?? [],
+          createdAt: r.createdAt,
+
+          depositMin: r.depositMin,
+          depositMax: r.depositMax,
+          depositSelected: r.depositSelected,
+        })
+      );
+    },
+  };
+}

@@ -1,5 +1,7 @@
 import { ConvexError, v } from "convex/values";
 import { mutation } from "./_generated/server";
+import type { ChatAction } from "./_lib/chatActions";
+import { DEV_CHAT_ACTIONS } from "./_lib/chatActions";
 import { getRoleOrThrow, loadReservationOrThrow } from "./_lib/reservationGuards";
 import { transitionReservationStatus } from "./_lib/reservationTransitions";
 import { authComponent } from "./auth";
@@ -7,24 +9,34 @@ import { authComponent } from "./auth";
 type ActionResult =
   | { ok: true }
   | {
-      ok: false;
-      code:
-        | "Forbidden"
-        | "InvalidStatus"
-        | "PaymentNotInitialized"
-        | "UnknownAction"
-        | "OnlyRenterCanPay";
-    };
+    ok: false;
+    code:
+    | "Forbidden"
+    | "InvalidStatus"
+    | "PaymentNotInitialized"
+    | "UnknownAction"
+    | "OnlyRenterCanPay";
+  };
 
 export const runChatAction = mutation({
   args: {
     threadId: v.id("threads"),
-    action: v.string(), // "PAY_NOW" | "DEV_MARK_PAID" | "DEV_DROPOFF_PENDING" | ...
+    action: v.union(
+      v.literal("PAY_NOW"),
+      v.literal("DEV_MARK_PAID"),
+      v.literal("DEV_DROPOFF_PENDING")
+    ),
   },
   handler: async (ctx, args): Promise<ActionResult> => {
     const user = await authComponent.getAuthUser(ctx);
     if (!user) throw new ConvexError("Unauthenticated");
     const me = String(user.userId ?? user.email ?? user._id);
+    const action = args.action as ChatAction;
+
+    // 🚫 Bloquer les actions DEV en production
+if (process.env.NODE_ENV === "production" && DEV_CHAT_ACTIONS.has(action)) {
+  return { ok: false, code: "Forbidden" };
+}
 
     const thread = await ctx.db.get(args.threadId);
     if (!thread) throw new ConvexError("ThreadNotFound");
@@ -37,7 +49,7 @@ export const runChatAction = mutation({
     const reservation = await loadReservationOrThrow(ctx, thread.reservationId);
     const role = getRoleOrThrow(reservation, me);
 
-    switch (args.action) {
+    switch (action) {
       /**
        * PAY_NOW
        * - locataire uniquement
@@ -127,7 +139,7 @@ export const runChatAction = mutation({
           nextStatus: "dropoff_pending",
           eventType: "dropoff_pending",
 
-          idempotencyKey: `phase:${String(reservation._id)}:dropoff_pending`,
+          idempotencyKey: `res:${String(reservation._id)}:dropoff_pending`,
         });
 
         return { ok: true };
