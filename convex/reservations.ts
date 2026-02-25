@@ -1,5 +1,5 @@
 import { ConvexError, v } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { internalMutation, mutation, query } from "./_generated/server";
 import { emitReservationEvent } from "./_lib/reservationEvents";
 import {
   assertRole,
@@ -10,6 +10,12 @@ import {
 import { transitionReservationStatus } from "./_lib/reservationTransitions";
 import { acquireVehicleLocks, releaseVehicleLocks } from "./_lib/vehicleLocks";
 import { authComponent } from "./auth";
+import { userKey } from "./_lib/userKey";
+import {
+  BLOCKING_STATUSES,
+  CANCELLABLE_STATUSES,
+  assertDevOnly,
+} from "./_lib/enums";
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -21,29 +27,56 @@ function assertStartBeforeEnd(startDate: string, endDate: string) {
   if (endDate <= startDate) throw new ConvexError("InvalidDateRange");
 }
 
-function userKey(user: any) {
-  return String(user.userId ?? user.email ?? user._id);
+// ✅ FIX: Interdire les réservations dans le passé
+function assertNotInPast(startDate: string) {
+  const today = new Date();
+  const yyyy = today.getUTCFullYear();
+  const mm = String(today.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(today.getUTCDate()).padStart(2, "0");
+  const todayStr = `${yyyy}-${mm}-${dd}`;
+  if (startDate < todayStr) throw new ConvexError("DateInPast");
 }
 
-const BLOCKING_STATUSES = new Set([
-  "requested",
-  "accepted_pending_payment",
-  "pickup_pending",
-  "in_progress",
-  "dropoff_pending",
-  "confirmed",
-]);
+// ✅ FIX: Limiter la durée max de réservation (90 jours)
+function assertReasonableDuration(startDate: string, endDate: string) {
+  const start = new Date(`${startDate}T00:00:00Z`);
+  const end = new Date(`${endDate}T00:00:00Z`);
+  const days = Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+  if (days > 90) throw new ConvexError("DurationTooLong");
+}
+
+
+/** Query pour récupérer une réservation par ID (auth requise) */
+export const getReservationById = query({
+  args: { reservationId: v.id("reservations") },
+  handler: async (ctx, args) => {
+    const user = await authComponent.getAuthUser(ctx);
+    if (!user) throw new ConvexError("Unauthenticated");
+    const me = userKey(user);
+
+    const r = await ctx.db.get(args.reservationId);
+    if (!r) return null;
+
+    // Seuls le locataire, le propriétaire, ou un appel interne peuvent voir
+    if (r.renterUserId !== me && String(r.ownerUserId) !== me) {
+      throw new ConvexError("Forbidden");
+    }
+
+    return r;
+  },
+});
 
 export const getReservationsForVehicle = query({
   args: { vehicleId: v.id("vehicles") },
   handler: async (ctx, args) => {
+    // ✅ Optimisé + borné (un véhicule ne devrait pas avoir des milliers de résas)
     const reservations = await ctx.db
       .query("reservations")
-      .filter((q) => q.eq(q.field("vehicleId"), args.vehicleId))
-      .collect();
+      .withIndex("by_vehicle", (q) => q.eq("vehicleId", args.vehicleId))
+      .take(500);
 
     return reservations
-      .filter((r) => BLOCKING_STATUSES.has(r.status))
+      .filter((r) => BLOCKING_STATUSES.has(r.status as any))
       .map((r) => ({
         startDate: r.startDate,
         endDate: r.endDate,
@@ -65,9 +98,10 @@ export const listReservationsForOwnerVehicle = query({
       throw new ConvexError("Forbidden");
     }
 
+    // ✅ Optimisé : utilise l'index by_vehicle
     return await ctx.db
       .query("reservations")
-      .filter((q) => q.eq(q.field("vehicleId"), args.vehicleId))
+      .withIndex("by_vehicle", (q) => q.eq("vehicleId", args.vehicleId))
       .order("desc")
       .take(50);
   },
@@ -80,9 +114,10 @@ export const listMyReservations = query({
     if (!user) throw new ConvexError("Unauthenticated");
     const renterUserId = userKey(user);
 
+    // ✅ Optimisé : utilise l'index by_renter
     return await ctx.db
       .query("reservations")
-      .filter((q) => q.eq(q.field("renterUserId"), renterUserId))
+      .withIndex("by_renter", (q) => q.eq("renterUserId", renterUserId))
       .order("desc")
       .take(50);
   },
@@ -97,14 +132,21 @@ export const listMyReservationsWithVehicle = query({
 
     const reservations = await ctx.db
       .query("reservations")
-      .filter((q) => q.eq(q.field("renterUserId"), renterUserId))
+      .withIndex("by_renter", (q) => q.eq("renterUserId", renterUserId))
       .order("desc")
       .take(50);
 
     const results: any[] = [];
     for (const r of reservations) {
       const vehicle = await ctx.db.get(r.vehicleId);
-      results.push({ reservation: r, vehicle });
+      let coverUrl: string | null = null;
+      if (vehicle?.imageUrls?.length) {
+        coverUrl = await ctx.storage.getUrl(vehicle.imageUrls[0] as any) ?? null;
+      }
+      results.push({
+        reservation: r,
+        vehicle: vehicle ? { ...vehicle, coverUrl } : null,
+      });
     }
 
     return results;
@@ -218,6 +260,7 @@ export const initPayment = mutation({
 export const markReservationPaid = mutation({
   args: { reservationId: v.id("reservations") },
   handler: async (ctx, args) => {
+    assertDevOnly(); // 🔒 DEV ONLY
     const user = await authComponent.getAuthUser(ctx);
     if (!user) throw new ConvexError("Unauthenticated");
     const renterUserId = userKey(user);
@@ -259,8 +302,7 @@ export const cancelReservation = mutation({
     const role = getRoleOrThrow(r, renterUserId);
     assertRole(role, ["renter"]);
 
-    const cancellable = new Set(["requested", "accepted_pending_payment", "pickup_pending"]);
-    assertStatus(r, Array.from(cancellable));
+    assertStatus(r, Array.from(CANCELLABLE_STATUSES));
 
     await transitionReservationStatus({
       ctx,
@@ -290,6 +332,7 @@ export const cancelReservation = mutation({
 export const markDropoffPending = mutation({
   args: { reservationId: v.id("reservations") },
   handler: async (ctx, args) => {
+    assertDevOnly(); // 🔒 DEV ONLY
     const user = await authComponent.getAuthUser(ctx);
     if (!user) throw new ConvexError("Unauthenticated");
     const me = userKey(user);
@@ -326,6 +369,8 @@ export const createReservation = mutation({
     assertIsoDate(args.startDate);
     assertIsoDate(args.endDate);
     assertStartBeforeEnd(args.startDate, args.endDate);
+    assertNotInPast(args.startDate);
+    assertReasonableDuration(args.startDate, args.endDate);
 
     const user = await authComponent.getAuthUser(ctx);
     if (!user) throw new ConvexError("Unauthenticated");
@@ -335,8 +380,8 @@ export const createReservation = mutation({
 
     const existingSamePair = await ctx.db
       .query("reservations")
-      .filter((q) =>
-        q.and(q.eq(q.field("vehicleId"), args.vehicleId), q.eq(q.field("renterUserId"), renterUserId))
+      .withIndex("by_vehicle_renter", (q) =>
+        q.eq("vehicleId", args.vehicleId).eq("renterUserId", renterUserId)
       )
       .order("desc")
       .take(1);
@@ -362,11 +407,12 @@ export const createReservation = mutation({
 
     const depositAmount = (vehicle as any).depositSelected ?? (vehicle as any).depositMin ?? 3000;
 
-    // (on garde ton overlap check en “filet” MVP)
+    // (on garde ton overlap check en "filet" MVP)
+    // ✅ Optimisé : utilise l'index by_vehicle
     const existing = await ctx.db
       .query("reservations")
-      .filter((q) => q.eq(q.field("vehicleId"), args.vehicleId))
-      .collect();
+      .withIndex("by_vehicle", (q) => q.eq("vehicleId", args.vehicleId))
+      .take(500);
 
     const overlaps = existing.some((r: any) => {
       if (!BLOCKING_STATUSES.has(r.status)) return false;
@@ -433,6 +479,7 @@ export const createReservation = mutation({
 export const backfillOwnerUserIdForSeeds = mutation({
   args: {},
   handler: async (ctx) => {
+    assertDevOnly(); // 🔒 DEV ONLY
     const reservations = await ctx.db.query("reservations").collect();
 
     for (const r of reservations) {
@@ -451,6 +498,7 @@ export const backfillOwnerUserIdForSeeds = mutation({
 export const backfillReservationDeposits = mutation({
   args: {},
   handler: async (ctx) => {
+    assertDevOnly(); // 🔒 DEV ONLY
     const reservations = await ctx.db.query("reservations").collect();
 
     for (const r of reservations) {
@@ -489,16 +537,18 @@ export const getMyRoleForReservation = query({
  * DEV / maintenance:
  * annule les réservations acceptées mais jamais payées
  */
-export const expireUnpaidReservations = mutation({
+// ✅ FIX: internalMutation — seul le cron peut l'appeler, pas les utilisateurs
+export const expireUnpaidReservations = internalMutation({
   args: {},
   handler: async (ctx) => {
     const now = Date.now();
     const ttlMs = 30 * 60 * 1000; // 30 minutes
 
+    // ✅ Optimisé : utilise l'index by_status
     const reservations = await ctx.db
       .query("reservations")
-      .filter((q) => q.eq(q.field("status"), "accepted_pending_payment"))
-      .collect();
+      .withIndex("by_status", (q) => q.eq("status", "accepted_pending_payment"))
+      .take(200);
 
     let count = 0;
 

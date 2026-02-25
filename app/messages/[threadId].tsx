@@ -116,6 +116,45 @@ export default function ThreadScreen() {
                             return;
                           }
 
+                          if (a.route === "action:CANCEL_RESERVATION") {
+                            Alert.alert(
+                              "Annuler la réservation",
+                              "Es-tu sûr de vouloir annuler ? Cette action est irréversible.",
+                              [
+                                { text: "Non", style: "cancel" },
+                                {
+                                  text: "Oui, annuler",
+                                  style: "destructive",
+                                  onPress: async () => {
+                                    const res = await runAction({
+                                      threadId: threadId as any,
+                                      action: "CANCEL_RESERVATION",
+                                    });
+                                    if (!res.ok) {
+                                      Alert.alert("Erreur", "Impossible d'annuler cette réservation.");
+                                      return;
+                                    }
+                                    Alert.alert("OK", "Réservation annulée.");
+                                  },
+                                },
+                              ]
+                            );
+                            return;
+                          }
+
+                          if (a.route === "action:DEV_DROPOFF_PENDING") {
+                            const res = await runAction({
+                              threadId: threadId as any,
+                              action: "DEV_DROPOFF_PENDING",
+                            });
+                            if (!res.ok) {
+                              Alert.alert("Indisponible", "Cette action n'est plus disponible.");
+                              return;
+                            }
+                            Alert.alert("OK", "Retour véhicule simulé ✅");
+                            return;
+                          }
+
                           if (!thread) return;
                           const reservationId = String(thread.reservationId);
 
@@ -135,7 +174,6 @@ export default function ThreadScreen() {
                         }}
                       >
                         <Text style={{ fontWeight: "700" }}>{a.label}</Text>
-                        <Text style={{ opacity: 0.7, marginTop: 2 }}>{a.route}</Text>
                       </Pressable>
                     ))}
                   </View>

@@ -1,6 +1,7 @@
 import { ConvexError } from "convex/values";
 import type { MutationCtx } from "../_generated/server";
 import type { Id } from "../_generated/dataModel";
+import type { ReservationStatus } from "./enums";
 
 export type ReservationRole = "owner" | "renter";
 
@@ -19,8 +20,11 @@ export function getRoleOrThrow(r: any, userId: string): ReservationRole {
   throw new ConvexError("Forbidden");
 }
 
-export function assertStatus(r: any, allowed: string[]) {
-  if (!allowed.includes(r.status)) throw new ConvexError("InvalidStatus");
+/** Vérifie que le statut courant est dans la liste autorisée (type-safe) */
+export function assertStatus(r: { status: string }, allowed: ReservationStatus[]) {
+  if (!allowed.includes(r.status as ReservationStatus)) {
+    throw new ConvexError("InvalidStatus");
+  }
 }
 
 export function assertRole(role: ReservationRole, allowed: ReservationRole[]) {

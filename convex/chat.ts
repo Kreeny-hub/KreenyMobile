@@ -1,10 +1,9 @@
 import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { authComponent } from "./auth";
+import { userKey } from "./_lib/userKey";
 
-function userKey(user: any) {
-  return String(user.userId ?? user.email ?? user._id);
-}
+// userKey importé depuis _lib/userKey
 
 export const getThreadByReservation = query({
   args: { reservationId: v.id("reservations") },
@@ -136,12 +135,24 @@ export const refreshThreadActions = mutation({
     let visibility: "all" | "renter" | "owner" = "all";
     let text = "Actions disponibles";
 
-    if (reservation.status === "accepted_pending_payment") {
-      actions = [{ label: "Payer maintenant", route: "action:PAY_NOW" }];
+    if (reservation.status === "requested") {
+      actions = [
+        { label: "Annuler la demande", route: "action:CANCEL_RESERVATION" },
+      ];
+      visibility = "renter";
+      text = "En attente de réponse du loueur";
+    } else if (reservation.status === "accepted_pending_payment") {
+      actions = [
+        { label: "Payer maintenant", route: "action:PAY_NOW" },
+        { label: "Annuler", route: "action:CANCEL_RESERVATION" },
+      ];
       visibility = "renter";
       text = "Paiement requis";
     } else if (reservation.status === "pickup_pending") {
-      actions = [{ label: "Faire le constat départ", route: "action:DO_CHECKIN" }];
+      actions = [
+        { label: "Faire le constat départ", route: "action:DO_CHECKIN" },
+        { label: "Annuler", route: "action:CANCEL_RESERVATION" },
+      ];
       visibility = "all";
       text = "Constat départ requis";
     } else if (reservation.status === "dropoff_pending") {

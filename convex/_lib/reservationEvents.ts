@@ -224,14 +224,29 @@ async function upsertActionsMessage(
   let text = "Actions disponibles";
 
   switch (args.status) {
+    case "requested":
+      // ✅ Le locataire peut annuler pendant que le loueur n'a pas encore répondu
+      actions = [
+        { label: "Annuler la demande", route: "action:CANCEL_RESERVATION" },
+      ];
+      visibility = "renter";
+      text = "En attente de réponse du loueur";
+      break;
+
     case "accepted_pending_payment":
-      actions = [{ label: "Payer maintenant", route: "action:PAY_NOW" }];
+      actions = [
+        { label: "Payer maintenant", route: "action:PAY_NOW" },
+        { label: "Annuler", route: "action:CANCEL_RESERVATION" },
+      ];
       visibility = "renter";
       text = "Paiement requis";
       break;
 
     case "pickup_pending":
-      actions = [{ label: "Faire le constat départ", route: "action:DO_CHECKIN" }];
+      actions = [
+        { label: "Faire le constat départ", route: "action:DO_CHECKIN" },
+        { label: "Annuler", route: "action:CANCEL_RESERVATION" },
+      ];
       visibility = "all";
       text = "Constat départ requis";
       break;

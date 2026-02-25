@@ -1,6 +1,8 @@
 import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { authComponent } from "./auth";
+import { assertDevOnly, BLOCKING_STATUSES } from "./_lib/enums";
+import { userKey } from "./_lib/userKey";
 
 function computeDepositRange(pricePerDay: number) {
   // MVP simple, à ajuster selon ton marché
@@ -16,7 +18,8 @@ function computeDepositRange(pricePerDay: number) {
 export const listVehicles = query({
   args: {},
   handler: async (ctx) => {
-    return await ctx.db.query("vehicles").order("desc").take(20);
+    const vehicles = await ctx.db.query("vehicles").order("desc").take(30);
+    return vehicles.filter(isVehicleActive);
   },
 });
 
@@ -24,10 +27,11 @@ export const listVehicles = query({
 export const listVehiclesWithCover = query({
   args: {},
   handler: async (ctx) => {
-    const vehicles = await ctx.db.query("vehicles").order("desc").take(20);
+    const vehicles = await ctx.db.query("vehicles").order("desc").take(30);
+    const active = vehicles.filter(isVehicleActive);
 
     const results = [];
-    for (const v of vehicles) {
+    for (const v of active) {
       let coverUrl: string | null = null;
       if (v.imageUrls.length > 0) {
         coverUrl = await ctx.storage.getUrl(v.imageUrls[0] as any);
@@ -45,6 +49,11 @@ export const getVehicleById = query({
   },
 });
 
+// ✅ Helper : véhicule actif (isActive undefined = true pour rétrocompat)
+function isVehicleActive(v: { isActive?: boolean }): boolean {
+  return v.isActive !== false;
+}
+
 export const searchVehicles = query({
   args: {
     city: v.optional(v.string()),
@@ -53,20 +62,26 @@ export const searchVehicles = query({
   },
   handler: async (ctx, args) => {
     const limit = args.limit ?? 20;
+    const city = args.city?.trim();
 
-    let q = ctx.db.query("vehicles").order("desc");
-
-    if (args.city && args.city.trim().length > 0) {
-      q = q.filter((f) => f.eq(f.field("city"), args.city!.trim()));
+    // ✅ Optimisé : utilise l'index by_city_createdAt quand une ville est spécifiée
+    let results;
+    if (city && city.length > 0) {
+      results = await ctx.db
+        .query("vehicles")
+        .withIndex("by_city_createdAt", (q) => q.eq("city", city))
+        .order("desc")
+        .take(limit * 2); // prend plus pour compenser le filtrage isActive/prix
+    } else {
+      results = await ctx.db.query("vehicles").order("desc").take(limit * 2);
     }
 
-    const results = await q.take(limit);
-
+    // ✅ Filtre isActive + prix en mémoire, puis tronque
+    let filtered = results.filter(isVehicleActive);
     if (typeof args.maxPricePerDay === "number") {
-      return results.filter((v) => v.pricePerDay <= args.maxPricePerDay!);
+      filtered = filtered.filter((v) => v.pricePerDay <= args.maxPricePerDay!);
     }
-
-    return results;
+    return filtered.slice(0, limit);
   },
 });
 
@@ -79,21 +94,28 @@ export const searchVehiclesWithCover = query({
   },
   handler: async (ctx, args) => {
     const limit = args.limit ?? 20;
+    const city = args.city?.trim();
 
-    let q = ctx.db.query("vehicles").order("desc");
-
-    if (args.city && args.city.trim().length > 0) {
-      q = q.filter((f) => f.eq(f.field("city"), args.city!.trim()));
+    // ✅ Optimisé : utilise l'index by_city_createdAt
+    let results;
+    if (city && city.length > 0) {
+      results = await ctx.db
+        .query("vehicles")
+        .withIndex("by_city_createdAt", (q) => q.eq("city", city))
+        .order("desc")
+        .take(limit * 2);
+    } else {
+      results = await ctx.db.query("vehicles").order("desc").take(limit * 2);
     }
 
-    let results = await q.take(limit);
-
+    let filtered = results.filter(isVehicleActive);
     if (typeof args.maxPricePerDay === "number") {
-      results = results.filter((v) => v.pricePerDay <= args.maxPricePerDay!);
+      filtered = filtered.filter((v) => v.pricePerDay <= args.maxPricePerDay!);
     }
+    filtered = filtered.slice(0, limit);
 
     const withCovers = [];
-    for (const v of results) {
+    for (const v of filtered) {
       let coverUrl: string | null = null;
       if (v.imageUrls.length > 0) {
         coverUrl = await ctx.storage.getUrl(v.imageUrls[0] as any);
@@ -118,13 +140,28 @@ export const createVehicle = mutation({
     const user = await authComponent.getAuthUser(ctx);
     if (!user) throw new ConvexError("Unauthenticated");
 
-    const ownerUserId = String(user.userId ?? user.email ?? user._id);
+    // ✅ FIX: Validation des inputs
+    const title = args.title.trim();
+    const city = args.city.trim();
+
+    if (title.length < 3 || title.length > 120) {
+      throw new ConvexError("InvalidTitle");
+    }
+    if (city.length < 2 || city.length > 60) {
+      throw new ConvexError("InvalidCity");
+    }
+    if (!Number.isFinite(args.pricePerDay) || args.pricePerDay < 50 || args.pricePerDay > 50000) {
+      throw new ConvexError("InvalidPrice");
+    }
+
+    const ownerUserId = userKey(user);
 
     // 🔒 Limite compte standard = 2 annonces
+    // ✅ Optimisé : utilise l'index by_ownerUserId
     const existing = await ctx.db
       .query("vehicles")
-      .filter((q) => q.eq(q.field("ownerUserId"), ownerUserId))
-      .collect();
+      .withIndex("by_ownerUserId", (q) => q.eq("ownerUserId", ownerUserId))
+      .take(10);
 
     if (existing.length >= 2) {
       throw new ConvexError("ListingLimitReached");
@@ -138,10 +175,11 @@ export const createVehicle = mutation({
     const depositSelected = min;
 
     const id = await ctx.db.insert("vehicles", {
-      title: args.title.trim(),
-      city: args.city.trim(),
+      title,
+      city,
       pricePerDay: args.pricePerDay,
       imageUrls: [],
+      isActive: true,
       createdAt: now,
       isSeed: false,
       ownerUserId,
@@ -167,34 +205,88 @@ export const listMyListingsWithRequestCount = query({
     const user = await authComponent.getAuthUser(ctx);
     if (!user) throw new ConvexError("Unauthenticated");
 
-    const ownerUserId = String(user.userId ?? user.email ?? user._id);
+    const ownerUserId = userKey(user);
 
+    // ✅ Optimisé : utilise l'index by_ownerUserId au lieu de .filter()
     const vehicles = await ctx.db
       .query("vehicles")
-      .filter((q) => q.eq(q.field("ownerUserId"), ownerUserId))
+      .withIndex("by_ownerUserId", (q) => q.eq("ownerUserId", ownerUserId))
       .order("desc")
       .take(50);
 
     const results = [];
 
     for (const vhl of vehicles) {
+      // ✅ Optimisé : utilise l'index by_owner_status_createdAt
       const requests = await ctx.db
         .query("reservations")
-        .filter((q) =>
-          q.and(
-            q.eq(q.field("vehicleId"), vhl._id),
-            q.eq(q.field("status"), "requested")
-          )
+        .withIndex("by_owner_status_createdAt", (q) =>
+          q.eq("ownerUserId", ownerUserId).eq("status", "requested")
         )
-        .collect();
+        .take(100);
+
+      // Filtrer seulement ceux de ce véhicule
+      const vehicleRequests = requests.filter((r) => r.vehicleId === vhl._id);
 
       results.push({
         vehicle: vhl,
-        requestCount: requests.length,
+        requestCount: vehicleRequests.length,
       });
     }
 
     return results;
+  },
+});
+
+/* ======================================================
+   SOFT-DELETE (DEACTIVATE / REACTIVATE)
+====================================================== */
+
+/** Désactive une annonce (soft-delete). Vérifie qu'il n'y a pas de résa active. */
+export const deactivateVehicle = mutation({
+  args: { vehicleId: v.id("vehicles") },
+  handler: async (ctx, args) => {
+    const user = await authComponent.getAuthUser(ctx);
+    if (!user) throw new ConvexError("Unauthenticated");
+    const me = userKey(user);
+
+    const vehicle = await ctx.db.get(args.vehicleId);
+    if (!vehicle) throw new ConvexError("VehicleNotFound");
+    if (String(vehicle.ownerUserId) !== me) throw new ConvexError("Forbidden");
+
+    // ✅ Vérifier qu'aucune réservation active n'existe
+    const activeReservations = await ctx.db
+      .query("reservations")
+      .withIndex("by_vehicle", (q) => q.eq("vehicleId", args.vehicleId))
+      .take(50);
+
+    const hasActive = activeReservations.some((r) =>
+      BLOCKING_STATUSES.has(r.status as any)
+    );
+
+    if (hasActive) {
+      throw new ConvexError("HasActiveReservations");
+    }
+
+    await ctx.db.patch(args.vehicleId, { isActive: false });
+    return { ok: true };
+  },
+});
+
+/** Réactive une annonce désactivée */
+export const reactivateVehicle = mutation({
+  args: { vehicleId: v.id("vehicles") },
+  handler: async (ctx, args) => {
+    const user = await authComponent.getAuthUser(ctx);
+    if (!user) throw new ConvexError("Unauthenticated");
+    const me = userKey(user);
+
+    const vehicle = await ctx.db.get(args.vehicleId);
+    if (!vehicle) throw new ConvexError("VehicleNotFound");
+    if (String(vehicle.ownerUserId) !== me) throw new ConvexError("Forbidden");
+
+    await ctx.db.patch(args.vehicleId, { isActive: true });
+    return { ok: true };
   },
 });
 
@@ -216,7 +308,7 @@ export const generateVehicleImageUploadUrl = mutation({
   handler: async (ctx, args) => {
     const user = await authComponent.getAuthUser(ctx);
     if (!user) throw new ConvexError("Unauthenticated");
-    const me = String(user.userId ?? user.email ?? user._id);
+    const me = userKey(user);
 
     // ✅ Ownership check
     const vehicle = await ctx.db.get(args.vehicleId);
@@ -250,7 +342,7 @@ export const addVehicleImage = mutation({
   handler: async (ctx, args) => {
     const user = await authComponent.getAuthUser(ctx);
     if (!user) throw new ConvexError("Unauthenticated");
-    const me = String(user.userId ?? user.email ?? user._id);
+    const me = userKey(user);
 
     const vehicle = await ctx.db.get(args.vehicleId);
     if (!vehicle) throw new ConvexError("VehicleNotFound");
@@ -277,7 +369,7 @@ export const removeVehicleImage = mutation({
   handler: async (ctx, args) => {
     const user = await authComponent.getAuthUser(ctx);
     if (!user) throw new ConvexError("Unauthenticated");
-    const me = String(user.userId ?? user.email ?? user._id);
+    const me = userKey(user);
 
     const vehicle = await ctx.db.get(args.vehicleId);
     if (!vehicle) throw new ConvexError("VehicleNotFound");
@@ -324,6 +416,7 @@ export const getVehicleWithImages = query({
 export const backfillVehicleDeposits = mutation({
   args: {},
   handler: async (ctx) => {
+    assertDevOnly(); // 🔒 DEV ONLY
     const vehicles = await ctx.db.query("vehicles").collect();
 
     for (const vhl of vehicles) {
@@ -345,6 +438,7 @@ export const backfillVehicleDeposits = mutation({
 export const seedVehicles = mutation({
   args: {},
   handler: async (ctx) => {
+    assertDevOnly(); // 🔒 DEV ONLY
     const seeds = await ctx.db
       .query("vehicles")
       .filter((q) => q.eq(q.field("isSeed"), true))

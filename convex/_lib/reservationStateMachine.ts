@@ -1,17 +1,5 @@
 import { ConvexError } from "convex/values";
-
-export const ReservationStatuses = [
-  "requested",
-  "accepted_pending_payment",
-  "pickup_pending",
-  "in_progress",
-  "dropoff_pending",
-  "completed",
-  "rejected",
-  "cancelled",
-] as const;
-
-export type ReservationStatus = (typeof ReservationStatuses)[number];
+import { RESERVATION_STATUSES, type ReservationStatus } from "./enums";
 
 // Liste des transitions autorisées (source de vérité)
 const ALLOWED: Record<ReservationStatus, ReservationStatus[]> = {
@@ -26,7 +14,6 @@ const ALLOWED: Record<ReservationStatus, ReservationStatus[]> = {
 };
 
 export function assertReservationTransition(current: string, next: string) {
-  // si on reçoit un statut inconnu, on refuse
   if (!(current in ALLOWED)) throw new ConvexError("UnknownStatus");
   const allowed = ALLOWED[current as ReservationStatus];
   if (!allowed.includes(next as ReservationStatus)) {

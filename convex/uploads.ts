@@ -1,6 +1,7 @@
 import { ConvexError, v } from "convex/values";
 import { mutation } from "./_generated/server";
 import { authComponent } from "./auth";
+import { userKey } from "./_lib/userKey";
 
 const MAX_AVATAR_BYTES = 2 * 1024 * 1024; // 2MB
 const MAX_REPORT_BYTES = 15 * 1024 * 1024; // 15MB
@@ -24,7 +25,7 @@ export const generateSensitiveUploadUrl = mutation({
   handler: async (ctx, args) => {
     const user = await authComponent.getAuthUser(ctx);
     if (!user) throw new ConvexError("Unauthenticated");
-    const me = String(user.userId ?? user.email ?? user._id);
+    const me = userKey(user);
 
     // règles taille + type
     if (args.kind === "avatar") {
@@ -79,7 +80,7 @@ export const finalizeSensitiveUpload = mutation({
   handler: async (ctx, args) => {
     const user = await authComponent.getAuthUser(ctx);
     if (!user) throw new ConvexError("Unauthenticated");
-    const me = String(user.userId ?? user.email ?? user._id);
+    const me = userKey(user);
 
     const now = Date.now();
 

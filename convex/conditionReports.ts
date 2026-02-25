@@ -5,6 +5,7 @@ import { emitReservationEvent } from "./_lib/reservationEvents";
 import { assertStatus, getRoleOrThrow, loadReservationOrThrow } from "./_lib/reservationGuards";
 import { transitionReservationStatus } from "./_lib/reservationTransitions";
 import { authComponent } from "./auth";
+import { userKey } from "./_lib/userKey";
 
 const REQUIRED_SLOTS = [
   "front",
@@ -35,7 +36,7 @@ export const getConditionReport = query({
   handler: async (ctx, args) => {
     const user = await authComponent.getAuthUser(ctx);
     if (!user) throw new ConvexError("Unauthenticated");
-    const me = String(user.userId ?? user.email ?? user._id);
+    const me = userKey(user);
 
     const reservation = await ctx.db.get(args.reservationId);
     if (!reservation) throw new ConvexError("ReservationNotFound");
@@ -64,7 +65,7 @@ export const getConditionReportWithUrls = query({
   handler: async (ctx, args) => {
     const user = await authComponent.getAuthUser(ctx);
     if (!user) throw new ConvexError("Unauthenticated");
-    const me = String(user.userId ?? user.email ?? user._id);
+    const me = userKey(user);
 
     const reservation = await ctx.db.get(args.reservationId);
     if (!reservation) throw new ConvexError("ReservationNotFound");
@@ -119,7 +120,7 @@ export const canSubmitConditionReport = query({
   handler: async (ctx, args) => {
     const user = await authComponent.getAuthUser(ctx);
     if (!user) throw new ConvexError("Unauthenticated");
-    const me = String(user.userId ?? user.email ?? user._id);
+    const me = userKey(user);
 
     const reservation = await ctx.db.get(args.reservationId);
     if (!reservation) throw new ConvexError("ReservationNotFound");
@@ -180,7 +181,7 @@ export const submitConditionReport = mutation({
     const user = await authComponent.getAuthUser(ctx);
     if (!user) throw new ConvexError("Unauthenticated");
 
-    const submittedByUserId = String(user.userId ?? user.email ?? user._id);
+    const submittedByUserId = userKey(user);
     const reservation = await loadReservationOrThrow(ctx, args.reservationId);
 
     // ✅ qui suis-je sur cette réservation (owner ou renter) ?
@@ -240,7 +241,7 @@ export const submitConditionReport = mutation({
       .withIndex("by_reservation_phase", (q) =>
         q.eq("reservationId", args.reservationId).eq("phase", args.phase)
       )
-      .collect();
+      .take(4); // max 2 par phase (owner + renter)
 
     const ownerDone = reportsForPhase.some(r => r.role === "owner");
     const renterDone = reportsForPhase.some(r => r.role === "renter");

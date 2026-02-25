@@ -124,10 +124,11 @@ export async function releaseVehicleLocks(opts: {
   }
 
   // supprimer aussi reservationLocks (si tu veux garder la table propre)
+  // ✅ Borné : max 90 jours de locks par réservation
   const locks = await ctx.db
     .query("reservationLocks")
     .withIndex("by_reservation", (q) => q.eq("reservationId", reservationId))
-    .collect();
+    .take(100);
 
   for (const l of locks) await ctx.db.delete(l._id);
 

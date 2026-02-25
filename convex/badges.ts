@@ -1,5 +1,6 @@
 import { query } from "./_generated/server";
 import { authComponent } from "./auth";
+import { userKey } from "./_lib/userKey";
 
 export const getProfileBadge = query({
   args: {},
@@ -9,14 +10,15 @@ export const getProfileBadge = query({
     // ✅ invité / déconnecté => pas de badge, pas d'erreur
     if (!user) return { show: false, requestedCount: 0 };
 
-    const me = String(user.userId ?? user.email ?? user._id);
+    const me = userKey(user);
 
+    // ✅ Optimisé + borné
     const count = await ctx.db
       .query("reservations")
-      .filter((q) =>
-        q.and(q.eq(q.field("ownerUserId"), me), q.eq(q.field("status"), "requested"))
+      .withIndex("by_owner_status_createdAt", (q) =>
+        q.eq("ownerUserId", me).eq("status", "requested")
       )
-      .collect();
+      .take(100);
 
     return { show: count.length > 0, requestedCount: count.length };
   },

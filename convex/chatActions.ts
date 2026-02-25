@@ -2,9 +2,12 @@ import { ConvexError, v } from "convex/values";
 import { mutation } from "./_generated/server";
 import type { ChatAction } from "./_lib/chatActions";
 import { DEV_CHAT_ACTIONS } from "./_lib/chatActions";
+import { CANCELLABLE_STATUSES } from "./_lib/enums";
 import { getRoleOrThrow, loadReservationOrThrow } from "./_lib/reservationGuards";
 import { transitionReservationStatus } from "./_lib/reservationTransitions";
+import { releaseVehicleLocks } from "./_lib/vehicleLocks";
 import { authComponent } from "./auth";
+import { userKey } from "./_lib/userKey";
 
 type ActionResult =
   | { ok: true }
@@ -15,7 +18,8 @@ type ActionResult =
     | "InvalidStatus"
     | "PaymentNotInitialized"
     | "UnknownAction"
-    | "OnlyRenterCanPay";
+    | "OnlyRenterCanPay"
+    | "OnlyRenterCanCancel";
   };
 
 export const runChatAction = mutation({
@@ -23,6 +27,7 @@ export const runChatAction = mutation({
     threadId: v.id("threads"),
     action: v.union(
       v.literal("PAY_NOW"),
+      v.literal("CANCEL_RESERVATION"),
       v.literal("DEV_MARK_PAID"),
       v.literal("DEV_DROPOFF_PENDING")
     ),
@@ -30,13 +35,13 @@ export const runChatAction = mutation({
   handler: async (ctx, args): Promise<ActionResult> => {
     const user = await authComponent.getAuthUser(ctx);
     if (!user) throw new ConvexError("Unauthenticated");
-    const me = String(user.userId ?? user.email ?? user._id);
+    const me = userKey(user);
     const action = args.action as ChatAction;
 
     // 🚫 Bloquer les actions DEV en production
-if (process.env.NODE_ENV === "production" && DEV_CHAT_ACTIONS.has(action)) {
-  return { ok: false, code: "Forbidden" };
-}
+    if (process.env.NODE_ENV === "production" && DEV_CHAT_ACTIONS.has(action)) {
+      return { ok: false, code: "Forbidden" };
+    }
 
     const thread = await ctx.db.get(args.threadId);
     if (!thread) throw new ConvexError("ThreadNotFound");
@@ -72,11 +77,8 @@ if (process.env.NODE_ENV === "production" && DEV_CHAT_ACTIONS.has(action)) {
           ownerUserId: String(reservation.ownerUserId ?? ""),
           actorUserId: me,
 
-          // ✅ statut inchangé
           nextStatus: reservation.status,
           eventType: "payment_initialized",
-
-          // ✅ patch paiement
           patch: { paymentStatus: "requires_action" },
 
           idempotencyKey: `res:${String(reservation._id)}:payment_initialized`,
@@ -86,10 +88,47 @@ if (process.env.NODE_ENV === "production" && DEV_CHAT_ACTIONS.has(action)) {
       }
 
       /**
-       * DEV_MARK_PAID
+       * CANCEL_RESERVATION
        * - locataire uniquement
-       * - accepted_pending_payment
-       * - paymentStatus requires_action
+       * - statuts annulables: requested, accepted_pending_payment, pickup_pending
+       * - libère les vehicle locks
+       */
+      case "CANCEL_RESERVATION": {
+        if (role !== "renter") {
+          return { ok: false, code: "OnlyRenterCanCancel" };
+        }
+
+        if (!CANCELLABLE_STATUSES.has(reservation.status as any)) {
+          return { ok: false, code: "InvalidStatus" };
+        }
+
+        await transitionReservationStatus({
+          ctx,
+          reservationId: reservation._id,
+          renterUserId: reservation.renterUserId,
+          ownerUserId: String(reservation.ownerUserId ?? ""),
+          actorUserId: me,
+
+          nextStatus: "cancelled",
+          eventType: "reservation_cancelled",
+
+          idempotencyKey: `res:${String(reservation._id)}:reservation_cancelled`,
+        });
+
+        // ✅ Libérer les locks de dates
+        await releaseVehicleLocks({
+          ctx,
+          vehicleId: reservation.vehicleId,
+          reservationId: reservation._id,
+          startDate: reservation.startDate,
+          endDate: reservation.endDate,
+        });
+
+        return { ok: true };
+      }
+
+      /**
+       * DEV_MARK_PAID
        */
       case "DEV_MARK_PAID": {
         if (role !== "renter") return { ok: false, code: "Forbidden" };
@@ -121,8 +160,6 @@ if (process.env.NODE_ENV === "production" && DEV_CHAT_ACTIONS.has(action)) {
 
       /**
        * DEV_DROPOFF_PENDING
-       * - owner OU renter
-       * - uniquement si in_progress
        */
       case "DEV_DROPOFF_PENDING": {
         if (reservation.status !== "in_progress") {
