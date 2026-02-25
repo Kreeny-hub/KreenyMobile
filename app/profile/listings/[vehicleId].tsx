@@ -91,22 +91,39 @@ export default function OwnerVehicleReservations() {
                 <View style={{ flexDirection: "row", gap: 8 }}>
                   <Button
                     title="Accepter"
-                    onPress={async () => {
-                      try {
-                        await accept({ reservationId: r._id });
-                      } catch (e) {
-                        Alert.alert("Erreur", e instanceof Error ? e.message : "Erreur inconnue");
-                      }
+                    onPress={() => {
+                      Alert.alert("Accepter cette demande ?", "Le locataire devra ensuite payer pour confirmer.", [
+                        { text: "Annuler", style: "cancel" },
+                        {
+                          text: "Accepter",
+                          onPress: async () => {
+                            try {
+                              await accept({ reservationId: r._id });
+                            } catch (e) {
+                              Alert.alert("Erreur", e instanceof Error ? e.message : "Erreur inconnue");
+                            }
+                          },
+                        },
+                      ]);
                     }}
                   />
                   <Button
                     title="Refuser"
-                    onPress={async () => {
-                      try {
-                        await reject({ reservationId: r._id });
-                      } catch (e) {
-                        Alert.alert("Erreur", e instanceof Error ? e.message : "Erreur inconnue");
-                      }
+                    onPress={() => {
+                      Alert.alert("Refuser cette demande ?", "Les dates seront libérées.", [
+                        { text: "Annuler", style: "cancel" },
+                        {
+                          text: "Refuser",
+                          style: "destructive",
+                          onPress: async () => {
+                            try {
+                              await reject({ reservationId: r._id });
+                            } catch (e) {
+                              Alert.alert("Erreur", e instanceof Error ? e.message : "Erreur inconnue");
+                            }
+                          },
+                        },
+                      ]);
                     }}
                   />
                 </View>

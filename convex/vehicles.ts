@@ -53,20 +53,19 @@ export const searchVehicles = query({
   },
   handler: async (ctx, args) => {
     const limit = args.limit ?? 20;
+    const citySearch = args.city?.trim().toLowerCase();
 
-    let q = ctx.db.query("vehicles").order("desc");
+    const all = await ctx.db.query("vehicles").order("desc").take(limit * 2);
 
-    if (args.city && args.city.trim().length > 0) {
-      q = q.filter((f) => f.eq(f.field("city"), args.city!.trim()));
+    let results = all;
+    if (citySearch && citySearch.length > 0) {
+      results = results.filter((v) => v.city.toLowerCase() === citySearch);
     }
-
-    const results = await q.take(limit);
-
     if (typeof args.maxPricePerDay === "number") {
-      return results.filter((v) => v.pricePerDay <= args.maxPricePerDay!);
+      results = results.filter((v) => v.pricePerDay <= args.maxPricePerDay!);
     }
 
-    return results;
+    return results.slice(0, limit);
   },
 });
 
@@ -79,18 +78,19 @@ export const searchVehiclesWithCover = query({
   },
   handler: async (ctx, args) => {
     const limit = args.limit ?? 20;
+    const citySearch = args.city?.trim().toLowerCase();
 
-    let q = ctx.db.query("vehicles").order("desc");
+    const all = await ctx.db.query("vehicles").order("desc").take(limit * 2);
 
-    if (args.city && args.city.trim().length > 0) {
-      q = q.filter((f) => f.eq(f.field("city"), args.city!.trim()));
+    let results = all;
+    if (citySearch && citySearch.length > 0) {
+      results = results.filter((v) => v.city.toLowerCase() === citySearch);
     }
-
-    let results = await q.take(limit);
-
     if (typeof args.maxPricePerDay === "number") {
       results = results.filter((v) => v.pricePerDay <= args.maxPricePerDay!);
     }
+
+    results = results.slice(0, limit);
 
     const withCovers = [];
     for (const v of results) {

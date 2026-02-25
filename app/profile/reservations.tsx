@@ -13,8 +13,6 @@ function statusLabel(status: string) {
       return "Demande envoyée";
     case "accepted_pending_payment":
       return "Acceptée — paiement requis";
-    case "confirmed":
-      return "Confirmée";
     case "pickup_pending":
       return "Départ — preuves à faire";
     case "in_progress":
@@ -37,8 +35,7 @@ function canPay(status: string) {
 }
 
 function canDoCheckin(status: string) {
-  // selon ta state machine, tu peux choisir confirmed OU pickup_pending
-  return status === "confirmed" || status === "pickup_pending";
+  return status === "pickup_pending";
 }
 
 function canDoCheckout(status: string) {
@@ -47,7 +44,7 @@ function canDoCheckout(status: string) {
 
 export default function ReservationsScreen() {
   const { isAuthenticated, isLoading } = useAuthStatus();
-  const { items, loading, error, refresh } = useMyReservations();
+  const { items, loading, error } = useMyReservations();
   const markPaid = useMutation(api.reservations.markReservationPaid);
   const markDropoff = useMutation(api.reservations.markDropoffPending);
   const initPayment = useMutation(api.reservations.initPayment);
@@ -75,7 +72,6 @@ export default function ReservationsScreen() {
   return (
     <SafeAreaView style={{ flex: 1, padding: 16, gap: 12 }}>
       <Text style={{ fontSize: 20, fontWeight: "700" }}>Mes réservations</Text>
-      <Button title="Rafraîchir" onPress={refresh} />
 
       {(loading || !items) && <Text>Loading...</Text>}
       {error && <Text>Error: {error}</Text>}
@@ -104,17 +100,24 @@ export default function ReservationsScreen() {
                   <View style={{ gap: 8 }}>
                     <Button
                       title="Payer maintenant"
-                      onPress={async () => {
-                        try {
-                          await initPayment({ reservationId: reservation._id as any });
-                          Alert.alert(
-                            "Paiement",
-                            "Paiement initialisé. (Stripe bientôt) \n\nDEV: utilise le bouton ci-dessous pour simuler le paiement."
-                          );
-                          refresh();
-                        } catch (e) {
-                          Alert.alert("Erreur", e instanceof Error ? e.message : "Erreur inconnue");
-                        }
+                      onPress={() => {
+                        Alert.alert("Payer maintenant ?", "Le paiement sera initialisé.", [
+                          { text: "Annuler", style: "cancel" },
+                          {
+                            text: "Payer",
+                            onPress: async () => {
+                              try {
+                                await initPayment({ reservationId: reservation._id as any });
+                                Alert.alert(
+                                  "Paiement",
+                                  "Paiement initialisé. (Stripe bientôt) \n\nDEV: utilise le bouton ci-dessous pour simuler le paiement."
+                                );
+                              } catch (e) {
+                                Alert.alert("Erreur", e instanceof Error ? e.message : "Erreur inconnue");
+                              }
+                            },
+                          },
+                        ]);
                       }}
                     />
 
@@ -125,7 +128,6 @@ export default function ReservationsScreen() {
                         try {
                           await markPaid({ reservationId: reservation._id as any });
                           Alert.alert("Paiement validé", "Tu peux maintenant faire le constat départ.");
-                          refresh();
                         } catch (e) {
                           Alert.alert("Erreur", e instanceof Error ? e.message : "Erreur inconnue");
                         }

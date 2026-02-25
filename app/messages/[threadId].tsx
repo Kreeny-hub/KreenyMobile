@@ -16,6 +16,22 @@ export default function ThreadScreen() {
   const refreshActions = useMutation(api.chat.refreshThreadActions);
 
   const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
+
+  const handleSend = async () => {
+    const text = draft.trim();
+    if (!text || !threadId || sending) return;
+    setSending(true);
+    try {
+      await sendMessage({ threadId: threadId as any, text });
+      setDraft("");
+      setTimeout(() => scrollToBottom(true), 100);
+    } catch (e) {
+      Alert.alert("Erreur", e instanceof Error ? e.message : "Erreur inconnue");
+    } finally {
+      setSending(false);
+    }
+  };
 
   const { listRef, scrollToBottom, onMessagesReady } = useChatScroll();
 
@@ -87,32 +103,59 @@ export default function ThreadScreen() {
                           paddingVertical: 10,
                           paddingHorizontal: 12,
                         }}
-                        onPress={async () => {
+                        onPress={() => {
                           if (!threadId) return;
 
-                          if (a.route === "action:PAY_NOW") {
-                            const res = await runAction({
-                              threadId: threadId as any,
-                              action: "PAY_NOW",
-                            });
-                            if (!res.ok) {
-                              Alert.alert("Indisponible", "Cette action n’est plus disponible.");
-                              return;
+                          const doAction = async (actionName: string, successMsg: string) => {
+                            try {
+                              const res = await runAction({
+                                threadId: threadId as any,
+                                action: actionName as any,
+                              });
+                              if (!res.ok) {
+                                Alert.alert("Indisponible", "Cette action n’est plus disponible.");
+                                return;
+                              }
+                              Alert.alert("OK", successMsg);
+                            } catch (e) {
+                              Alert.alert("Erreur", e instanceof Error ? e.message : "Erreur inconnue");
                             }
-                            Alert.alert("OK", "Paiement initialisé.");
+                          };
+
+                          const confirm = (title: string, msg: string, onConfirm: () => void) => {
+                            Alert.alert(title, msg, [
+                              { text: "Annuler", style: "cancel" },
+                              { text: "Confirmer", onPress: onConfirm },
+                            ]);
+                          };
+
+                          if (a.route === "action:ACCEPT") {
+                            confirm("Accepter la demande ?", "Le locataire devra ensuite payer pour confirmer.", () =>
+                              doAction("ACCEPT", "Demande acceptée."));
                             return;
                           }
-
+                          if (a.route === "action:REJECT") {
+                            confirm("Refuser la demande ?", "Les dates seront libérées.", () =>
+                              doAction("REJECT", "Demande refusée."));
+                            return;
+                          }
+                          if (a.route === "action:PAY_NOW") {
+                            confirm("Payer maintenant ?", "Le paiement sera initialisé.", () =>
+                              doAction("PAY_NOW", "Paiement initialisé."));
+                            return;
+                          }
                           if (a.route === "action:DEV_MARK_PAID") {
-                            const res = await runAction({
-                              threadId: threadId as any,
-                              action: "DEV_MARK_PAID",
-                            });
-                            if (!res.ok) {
-                              Alert.alert("Indisponible", "Cette action n’est plus disponible.");
-                              return;
-                            }
-                            Alert.alert("OK", "Paiement simulé ✅");
+                            doAction("DEV_MARK_PAID", "Paiement simulé.");
+                            return;
+                          }
+                          if (a.route === "action:TRIGGER_RETURN") {
+                            confirm("Déclarer le retour ?", "La phase de constat retour sera lancée.", () =>
+                              doAction("TRIGGER_RETURN", "Retour déclaré. Constat retour requis."));
+                            return;
+                          }
+                          if (a.route === "action:OWNER_CANCEL") {
+                            confirm("Annuler la réservation ?", "Cette action est irréversible.", () =>
+                              doAction("OWNER_CANCEL", "Réservation annulée."));
                             return;
                           }
 
@@ -135,7 +178,6 @@ export default function ThreadScreen() {
                         }}
                       >
                         <Text style={{ fontWeight: "700" }}>{a.label}</Text>
-                        <Text style={{ opacity: 0.7, marginTop: 2 }}>{a.route}</Text>
                       </Pressable>
                     ))}
                   </View>
@@ -145,20 +187,37 @@ export default function ThreadScreen() {
           />
         )}
 
-        {/* Barre d’écriture (DANS LE FLOW NORMAL) */}
-        <View style={{ borderTopWidth: 1, padding: 10, paddingHorizontal: 16 }}>
+        {/* Barre d’écriture */}
+        <View style={{ borderTopWidth: 1, padding: 10, paddingHorizontal: 16, flexDirection: "row", alignItems: "center", gap: 8 }}>
           <TextInput
             placeholder="Écris un message…"
             value={draft}
             onChangeText={setDraft}
+            onSubmitEditing={handleSend}
+            returnKeyType="send"
             onFocus={() => setTimeout(() => scrollToBottom(true), 80)}
             style={{
+              flex: 1,
               borderWidth: 1,
               borderRadius: 12,
               paddingHorizontal: 12,
               paddingVertical: 10,
             }}
           />
+          <Pressable
+            onPress={handleSend}
+            disabled={!draft.trim() || sending}
+            style={{
+              backgroundColor: draft.trim() && !sending ? "#000" : "#ccc",
+              borderRadius: 10,
+              paddingVertical: 10,
+              paddingHorizontal: 16,
+            }}
+          >
+            <Text style={{ color: "#fff", fontWeight: "700" }}>
+              {sending ? "..." : "Envoyer"}
+            </Text>
+          </Pressable>
         </View>
       </View>
     </AppScreen>

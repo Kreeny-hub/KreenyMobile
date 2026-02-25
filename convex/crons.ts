@@ -11,4 +11,12 @@ crons.interval(
   {}
 );
 
+// Toutes les heures : passe en dropoff_pending les locations dont endDate est dépassée
+crons.interval(
+  "auto transition expired rentals",
+  { hours: 1 },
+  api.reservations.autoTransitionExpiredRentals,
+  {}
+);
+
 export default crons;

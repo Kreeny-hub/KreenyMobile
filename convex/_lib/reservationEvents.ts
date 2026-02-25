@@ -1,6 +1,7 @@
 import { ConvexError } from "convex/values";
 import type { Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
+import { computeActionsForStatus } from "./actionsByStatus";
 
 export type ReservationEventType =
   | "reservation_created"
@@ -218,38 +219,9 @@ async function upsertActionsMessage(
     .withIndex("by_eventKey", (q) => q.eq("eventKey", key))
     .unique();
 
-  // calcule les actions selon le statut (centralisé backend)
-  let actions: { label: string; route: string }[] = [];
-  let visibility: Visibility = "all";
-  let text = "Actions disponibles";
-
-  switch (args.status) {
-    case "accepted_pending_payment":
-      actions = [{ label: "Payer maintenant", route: "action:PAY_NOW" }];
-      visibility = "renter";
-      text = "Paiement requis";
-      break;
-
-    case "pickup_pending":
-      actions = [{ label: "Faire le constat départ", route: "action:DO_CHECKIN" }];
-      visibility = "all";
-      text = "Constat départ requis";
-      break;
-
-    case "dropoff_pending":
-      actions = [{ label: "Faire le constat retour", route: "action:DO_CHECKOUT" }];
-      visibility = "all";
-      text = "Constat retour requis";
-      break;
-
-    default:
-      actions = [];
-      visibility = "all";
-      text = "Aucune action";
-  }
+  const { text, actions, visibility } = computeActionsForStatus(args.status, args.paymentStatus);
 
   if (!existing) {
-    // ✅ création 1 seule fois
     await ctx.db.insert("messages", {
       threadId: args.threadId,
       reservationId: args.reservationId,
@@ -263,14 +235,6 @@ async function upsertActionsMessage(
     return;
   }
 
-  // ✅ mise à jour: patch SEULEMENT des champs modifiables
-  await ctx.db.patch(existing._id, {
-    text,
-    actions,
-    visibility,
-    // ✅ on ne touche PAS createdAt : le message "actions" reste stable dans la liste
-  });
-
-  // optionnel: garder le thread "chaud" si les actions changent
+  await ctx.db.patch(existing._id, { text, actions, visibility });
   await ctx.db.patch(args.threadId, { lastMessageAt: now });
 }

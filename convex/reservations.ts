@@ -31,7 +31,6 @@ const BLOCKING_STATUSES = new Set([
   "pickup_pending",
   "in_progress",
   "dropoff_pending",
-  "confirmed",
 ]);
 
 export const getReservationsForVehicle = query({
@@ -286,6 +285,46 @@ export const cancelReservation = mutation({
   },
 });
 
+/** OWNER: annule une réservation */
+export const ownerCancelReservation = mutation({
+  args: { reservationId: v.id("reservations") },
+  handler: async (ctx, args) => {
+    const user = await authComponent.getAuthUser(ctx);
+    if (!user) throw new ConvexError("Unauthenticated");
+    const ownerUserId = userKey(user);
+
+    const r = await loadReservationOrThrow(ctx, args.reservationId);
+
+    const role = getRoleOrThrow(r, ownerUserId);
+    assertRole(role, ["owner"]);
+
+    const cancellable = new Set(["requested", "accepted_pending_payment", "pickup_pending"]);
+    if (!cancellable.has(r.status)) throw new ConvexError("InvalidStatus");
+
+    await transitionReservationStatus({
+      ctx,
+      reservationId: r._id,
+      renterUserId: r.renterUserId,
+      ownerUserId: ownerUserId,
+      actorUserId: ownerUserId,
+      nextStatus: "cancelled",
+      eventType: "reservation_cancelled",
+      idempotencyKey: `res:${String(r._id)}:owner_cancelled`,
+      payload: { reason: "owner_cancelled" },
+    });
+
+    await releaseVehicleLocks({
+      ctx,
+      vehicleId: r.vehicleId,
+      reservationId: r._id,
+      startDate: r.startDate,
+      endDate: r.endDate,
+    });
+
+    return { ok: true };
+  },
+});
+
 /** DEV: in_progress -> dropoff_pending */
 export const markDropoffPending = mutation({
   args: { reservationId: v.id("reservations") },
@@ -361,18 +400,6 @@ export const createReservation = mutation({
     if (String(ownerUserId) === renterUserId) throw new ConvexError("CannotRentOwnVehicle");
 
     const depositAmount = (vehicle as any).depositSelected ?? (vehicle as any).depositMin ?? 3000;
-
-    // (on garde ton overlap check en “filet” MVP)
-    const existing = await ctx.db
-      .query("reservations")
-      .filter((q) => q.eq(q.field("vehicleId"), args.vehicleId))
-      .collect();
-
-    const overlaps = existing.some((r: any) => {
-      if (!BLOCKING_STATUSES.has(r.status)) return false;
-      return !(args.endDate < r.startDate || args.startDate > r.endDate);
-    });
-    if (overlaps) throw new ConvexError("VehicleUnavailable");
 
     const days = Math.max(
       0,
@@ -532,5 +559,41 @@ export const expireUnpaidReservations = mutation({
     }
 
     return { ok: true, expired: count };
+  },
+});
+
+/** Cron: passe automatiquement en dropoff_pending les locations dont la date de fin est dépassée */
+export const autoTransitionExpiredRentals = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = new Date();
+    const todayStr = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}-${String(now.getUTCDate()).padStart(2, "0")}`;
+
+    const reservations = await ctx.db
+      .query("reservations")
+      .filter((q) => q.eq(q.field("status"), "in_progress"))
+      .collect();
+
+    let count = 0;
+
+    for (const r of reservations) {
+      if (r.endDate > todayStr) continue;
+
+      await transitionReservationStatus({
+        ctx,
+        reservationId: r._id,
+        renterUserId: r.renterUserId,
+        ownerUserId: String(r.ownerUserId ?? ""),
+        actorUserId: "system",
+        nextStatus: "dropoff_pending",
+        eventType: "dropoff_pending",
+        idempotencyKey: `auto_return:${String(r._id)}`,
+        payload: { reason: "end_date_reached" },
+      });
+
+      count++;
+    }
+
+    return { ok: true, transitioned: count };
   },
 });
