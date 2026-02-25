@@ -292,7 +292,7 @@ export default function ProfileTab() {
             icon="chatbubble-outline"
             label="Messagerie"
             sublabel="Discussions avec les propriétaires"
-            onPress={() => router.push("/(tabs)/inbox")}
+            onPress={() => router.push("/(tabs)/messages")}
             colors={colors}
             isDark={isDark}
           />

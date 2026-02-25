@@ -63,6 +63,14 @@ function ThemedStack() {
           }}
         />
         <Stack.Screen name="profile/listings" options={{ title: "Mes annonces" }} />
+        <Stack.Screen
+          name="messages/[threadId]"
+          options={{
+            title: "Conversation",
+            headerBackTitle: "",
+            headerShadowVisible: false,
+          }}
+        />
         <Stack.Screen name="profile/settings" options={{ title: "Paramètres" }} />
         <Stack.Screen name="profile/avatar" options={{ title: "Photo de profil" }} />
         <Stack.Screen name="profile/dashboard" options={{ title: "Tableau de bord" }} />

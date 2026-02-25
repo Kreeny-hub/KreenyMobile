@@ -3,7 +3,6 @@ import { mutation, query } from "./_generated/server";
 import { authComponent } from "./auth";
 import { userKey } from "./_lib/userKey";
 
-// userKey importé depuis _lib/userKey
 
 export const getThreadByReservation = query({
   args: { reservationId: v.id("reservations") },
@@ -58,30 +57,75 @@ export const listMyThreads = query({
     if (!user) throw new ConvexError("Unauthenticated");
     const me = userKey(user);
 
-    // Threads où je suis locataire
     const asRenter = await ctx.db
       .query("threads")
       .withIndex("by_renter", (q) => q.eq("renterUserId", me))
       .order("desc")
       .take(100);
 
-    // Threads où je suis loueur
     const asOwner = await ctx.db
       .query("threads")
       .withIndex("by_owner", (q) => q.eq("ownerUserId", me))
       .order("desc")
       .take(100);
 
-    // Merge + dédoublonnage (au cas où)
     const map = new Map<string, (typeof asRenter)[number]>();
     for (const t of [...asRenter, ...asOwner]) map.set(String(t._id), t);
 
-    // Tri par date création (plus récent d’abord)
-    return Array.from(map.values()).sort((a, b) => {
+    const sorted = Array.from(map.values()).sort((a, b) => {
       const aTime = a.lastMessageAt ?? a.createdAt;
       const bTime = b.lastMessageAt ?? b.createdAt;
       return bTime - aTime;
     });
+
+    // Enrich with vehicle info, last message, other user profile
+    const enriched = [];
+    for (const t of sorted) {
+      const reservation = await ctx.db.get(t.reservationId);
+      let vehicleTitle = "Véhicule";
+      let vehicleCity = "";
+      let coverUrl: string | null = null;
+
+      if (reservation) {
+        const vehicle = await ctx.db.get(reservation.vehicleId);
+        if (vehicle) {
+          vehicleTitle = vehicle.title;
+          vehicleCity = vehicle.city;
+          if (vehicle.imageUrls?.length) {
+            coverUrl = await ctx.storage.getUrl(vehicle.imageUrls[0] as any) ?? null;
+          }
+        }
+      }
+
+      // Last message preview
+      const lastMessages = await ctx.db
+        .query("messages")
+        .withIndex("by_thread", (q) => q.eq("threadId", t._id))
+        .order("desc")
+        .take(1);
+      const lastMsg = lastMessages[0] ?? null;
+
+      // Other user profile
+      const otherUserId = t.renterUserId === me ? t.ownerUserId : t.renterUserId;
+      const otherProfile = await ctx.db
+        .query("userProfiles")
+        .withIndex("by_user", (q) => q.eq("userId", otherUserId))
+        .first();
+
+      enriched.push({
+        ...t,
+        vehicleTitle,
+        vehicleCity,
+        coverUrl,
+        lastMessageText: lastMsg?.text ?? null,
+        lastMessageType: lastMsg?.type ?? null,
+        otherUserName: otherProfile?.displayName ?? "Utilisateur",
+        myRole: t.renterUserId === me ? "renter" as const : "owner" as const,
+        reservationStatus: reservation?.status ?? null,
+      });
+    }
+
+    return enriched;
   },
 });
 
