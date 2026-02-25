@@ -1,11 +1,9 @@
 import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { authComponent } from "./auth";
+import { userKey } from "./_lib/userKey";
 
-function getMe(user: any) {
-  // ✅ Toujours présent côté Convex Better Auth
-  return String(user._id);
-}
+// userKey importé depuis _lib/userKey
 
 export const getMyProfile = query({
   args: {},
@@ -13,7 +11,7 @@ export const getMyProfile = query({
     const user = await authComponent.getAuthUser(ctx);
     if (!user) return null;
 
-    const me = getMe(user);
+    const me = userKey(user);
 
     const profile = await ctx.db
       .query("userProfiles")
@@ -30,7 +28,7 @@ export const ensureMyProfile = mutation({
     const user = await authComponent.getAuthUser(ctx);
     if (!user) throw new ConvexError("Unauthenticated");
 
-    const me = getMe(user);
+    const me = userKey(user);
     const now = Date.now();
 
     const existing = await ctx.db
@@ -61,7 +59,7 @@ export const setMyAvatar = mutation({
     const user = await authComponent.getAuthUser(ctx);
     if (!user) throw new ConvexError("Unauthenticated");
 
-    const me = getMe(user);
+    const me = userKey(user);
     const now = Date.now();
 
     const profile = await ctx.db
@@ -95,7 +93,7 @@ export const getMyAvatarUrl = query({
     const user = await authComponent.getAuthUser(ctx);
     if (!user) return null;
 
-    const me = getMe(user);
+    const me = userKey(user);
 
     const profile = await ctx.db
       .query("userProfiles")
@@ -125,7 +123,7 @@ export const migrateMyProfileToAuthId = mutation({
     const user = await authComponent.getAuthUser(ctx);
     if (!user) throw new ConvexError("Unauthenticated");
 
-    const authId = String(user._id);
+    const authId = userKey(user);
     const email = user.email ? String(user.email) : null;
 
     // 1) si déjà un profile avec authId -> rien à faire
@@ -135,8 +133,8 @@ export const migrateMyProfileToAuthId = mutation({
       .first();
     if (already) return { ok: true as const, migrated: false as const, reason: "already_ok" as const };
 
-    // 2) sinon, tente de retrouver l’ancien profile par email (si tu en avais)
-    let old =
+    // 2) sinon, tente de retrouver l'ancien profile par email (si tu en avais)
+    const old =
       email
         ? await ctx.db
             .query("userProfiles")
@@ -144,14 +142,11 @@ export const migrateMyProfileToAuthId = mutation({
             .first()
         : null;
 
-    // 3) ou par "k577..." (ton ancien id app) -> on le récupère depuis userProfiles existant le plus récent
-    // (si tu n’as qu’un profil, ça suffit)
-    if (!old) {
-      old = await ctx.db.query("userProfiles").order("desc").first();
-    }
+    // ✅ FIX: supprimé le fallback dangereux qui prenait le profil le plus récent
+    // de N'IMPORTE QUEL utilisateur. Maintenant on ne migre que par email exact.
 
     if (!old) {
-      // pas de profile du tout -> on en crée un clean
+      // pas de profile trouvé -> on en crée un clean
       const now = Date.now();
       const profileId = await ctx.db.insert("userProfiles", {
         userId: authId,

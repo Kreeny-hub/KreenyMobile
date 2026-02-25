@@ -1,6 +1,7 @@
 import { query } from "./_generated/server";
-import { v, ConvexError } from "convex/values";
+import { ConvexError } from "convex/values";
 import { authComponent } from "./auth";
+import { userKey } from "./_lib/userKey";
 
 export const getOwnerDashboard = query({
   args: {},
@@ -8,39 +9,37 @@ export const getOwnerDashboard = query({
     const user = await authComponent.getAuthUser(ctx);
     if (!user) throw new ConvexError("Unauthenticated");
 
-    const ownerUserId = String(user.userId ?? user.email ?? user._id);
+    const ownerUserId = userKey(user);
 
-    // Demandes reçues
+    // ✅ Optimisé : utilise l'index by_owner_status_createdAt au lieu de .filter()
     const requested = await ctx.db
       .query("reservations")
-      .filter((q) =>
-        q.and(q.eq(q.field("ownerUserId"), ownerUserId), q.eq(q.field("status"), "requested"))
+      .withIndex("by_owner_status_createdAt", (q) =>
+        q.eq("ownerUserId", ownerUserId).eq("status", "requested")
       )
       .order("desc")
       .take(3);
 
-    // Actions urgentes (constats)
     const pickupPending = await ctx.db
       .query("reservations")
-      .filter((q) =>
-        q.and(q.eq(q.field("ownerUserId"), ownerUserId), q.eq(q.field("status"), "pickup_pending"))
+      .withIndex("by_owner_status_createdAt", (q) =>
+        q.eq("ownerUserId", ownerUserId).eq("status", "pickup_pending")
       )
       .order("desc")
       .take(3);
 
     const dropoffPending = await ctx.db
       .query("reservations")
-      .filter((q) =>
-        q.and(q.eq(q.field("ownerUserId"), ownerUserId), q.eq(q.field("status"), "dropoff_pending"))
+      .withIndex("by_owner_status_createdAt", (q) =>
+        q.eq("ownerUserId", ownerUserId).eq("status", "dropoff_pending")
       )
       .order("desc")
       .take(3);
 
-    // En cours
     const inProgress = await ctx.db
       .query("reservations")
-      .filter((q) =>
-        q.and(q.eq(q.field("ownerUserId"), ownerUserId), q.eq(q.field("status"), "in_progress"))
+      .withIndex("by_owner_status_createdAt", (q) =>
+        q.eq("ownerUserId", ownerUserId).eq("status", "in_progress")
       )
       .order("desc")
       .take(3);

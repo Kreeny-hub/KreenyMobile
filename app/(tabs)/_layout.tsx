@@ -4,8 +4,9 @@ import { Ionicons } from "@expo/vector-icons";
 import { useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { useAuthStatus } from "../../src/presentation/hooks/useAuthStatus";
+import { useTheme } from "../../src/theme";
 
-function ProfileIcon({ focused }: { focused: boolean }) {
+function ProfileIcon({ color }: { color: string }) {
   const { isAuthenticated } = useAuthStatus();
 
   const badge = useQuery(
@@ -17,17 +18,19 @@ function ProfileIcon({ focused }: { focused: boolean }) {
 
   return (
     <View style={{ width: 28, height: 28 }}>
-      <Ionicons name={focused ? "person" : "person-outline"} size={26} />
+      <Ionicons name="person-outline" size={24} color={color} />
       {showDot && (
         <View
           style={{
             position: "absolute",
-            top: 1,
-            right: 1,
-            width: 8,
-            height: 8,
-            borderRadius: 4,
-            backgroundColor: "red",
+            top: 0,
+            right: 0,
+            width: 9,
+            height: 9,
+            borderRadius: 5,
+            backgroundColor: "#EF4444",
+            borderWidth: 1.5,
+            borderColor: "#FFF",
           }}
         />
       )}
@@ -36,15 +39,36 @@ function ProfileIcon({ focused }: { focused: boolean }) {
 }
 
 export default function TabsLayout() {
+  const { colors, isDark } = useTheme();
+
   return (
-    <Tabs screenOptions={{ headerShown: false }}>
+    <Tabs
+      screenOptions={{
+        headerShown: false,
+        tabBarStyle: {
+          backgroundColor: colors.tabBar,
+          borderTopColor: colors.tabBarBorder,
+          borderTopWidth: isDark ? 0.5 : 0.5,
+          paddingTop: 4,
+          height: 88,
+        },
+        tabBarActiveTintColor: colors.tabBarActive,
+        tabBarInactiveTintColor: colors.tabBarInactive,
+        tabBarLabelStyle: {
+          fontSize: 11,
+          fontWeight: "600",
+          marginTop: 2,
+        },
+      }}
+    >
       <Tabs.Screen name="index" options={{ href: null }} />
+
       <Tabs.Screen
         name="home"
         options={{
-          title: "Home",
-          tabBarIcon: ({ focused }) => (
-            <Ionicons name={focused ? "home" : "home-outline"} size={26} />
+          title: "Accueil",
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="home-outline" size={22} color={color} />
           ),
         }}
       />
@@ -53,8 +77,8 @@ export default function TabsLayout() {
         name="search"
         options={{
           title: "Explorer",
-          tabBarIcon: ({ focused }) => (
-            <Ionicons name={focused ? "search" : "search-outline"} size={26} />
+          tabBarIcon: ({ color }) => (
+            <Ionicons name="search-outline" size={22} color={color} />
           ),
         }}
       />
@@ -63,8 +87,8 @@ export default function TabsLayout() {
         name="publish"
         options={{
           title: "Publier",
-          tabBarIcon: ({ focused }) => (
-            <Ionicons name={focused ? "add-circle" : "add-circle-outline"} size={28} />
+          tabBarIcon: ({ color }) => (
+            <Ionicons name="add-circle-outline" size={26} color={color} />
           ),
         }}
       />
@@ -73,8 +97,8 @@ export default function TabsLayout() {
         name="messages"
         options={{
           title: "Messages",
-          tabBarIcon: ({ focused }) => (
-            <Ionicons name={focused ? "chatbubble" : "chatbubble-outline"} size={26} />
+          tabBarIcon: ({ color }) => (
+            <Ionicons name="chatbubble-outline" size={22} color={color} />
           ),
         }}
       />
@@ -83,7 +107,7 @@ export default function TabsLayout() {
         name="profile"
         options={{
           title: "Profil",
-          tabBarIcon: ({ focused }) => <ProfileIcon focused={focused} />,
+          tabBarIcon: ({ color }) => <ProfileIcon color={color} />,
         }}
       />
     </Tabs>

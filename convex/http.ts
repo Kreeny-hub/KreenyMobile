@@ -2,6 +2,7 @@ import { httpRouter } from "convex/server";
 import { api } from "./_generated/api";
 import { httpAction } from "./_generated/server";
 import { authComponent, createAuth } from "./auth";
+import { userKey } from "./_lib/userKey";
 
 const http = httpRouter();
 
@@ -15,7 +16,7 @@ http.route({
     const user = await authComponent.getAuthUser(ctx).catch(() => null);
     if (!user) return new Response("Unauthenticated", { status: 401 });
 
-    const me = String(user._id);
+    const me = userKey(user);
 
     const profile = await ctx.runQuery(api.userProfiles.getProfileByUserId, {
       userId: me,

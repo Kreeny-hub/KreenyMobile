@@ -7,6 +7,9 @@ export default defineSchema({
     pricePerDay: v.number(),
     city: v.string(),
     imageUrls: v.array(v.string()),
+
+    // ✅ Soft-delete : false = annonce désactivée (invisible dans les recherches)
+    isActive: v.optional(v.boolean()),
     ownerId: v.optional(v.id("users")),
     ownerUserId: v.optional(v.string()),
     createdAt: v.number(),
@@ -74,7 +77,8 @@ export default defineSchema({
     .index("by_owner", ["ownerUserId"])
     .index("by_status", ["status"])
     .index("by_renter_status_createdAt", ["renterUserId", "status", "createdAt"])
-    .index("by_owner_status_createdAt", ["ownerUserId", "status", "createdAt"]),
+    .index("by_owner_status_createdAt", ["ownerUserId", "status", "createdAt"])
+    .index("by_vehicle_renter", ["vehicleId", "renterUserId"]),
 
   conditionReports: defineTable({
     reservationId: v.id("reservations"),
@@ -128,6 +132,9 @@ export default defineSchema({
     ),
 
     // optionnel: filtrer l’affichage selon le rôle (plus tard)
+    // ✅ Qui a envoyé le message (pour les messages de type "user")
+    senderUserId: v.optional(v.string()),
+
     visibility: v.optional(v.union(v.literal("all"), v.literal("renter"), v.literal("owner"))),
   })
     .index("by_thread", ["threadId", "createdAt"])
@@ -193,17 +200,22 @@ export default defineSchema({
     .index("by_reservation", ["reservationId", "createdAt"]),
 
   userProfiles: defineTable({
-    userId: v.string(), // ton identifiant (me = userId/email/_id string)
+    userId: v.string(),
     createdAt: v.number(),
     updatedAt: v.number(),
 
-    // Avatar sensible (Convex Storage)
+    // Avatar (Convex Storage)
     avatarStorageId: v.optional(v.id("_storage")),
 
-    // optionnel pour plus tard
     displayName: v.optional(v.string()),
+
+    // ✅ Stripe
+    stripeCustomerId: v.optional(v.string()),       // ID Stripe du client (locataire)
+    stripeConnectAccountId: v.optional(v.string()),  // ID Stripe Connect (loueur, pour les payouts)
+    stripeConnectOnboarded: v.optional(v.boolean()), // onboarding Stripe Connect terminé ?
   })
-    .index("by_user", ["userId"]),
+    .index("by_user", ["userId"])
+    .index("by_stripeCustomer", ["stripeCustomerId"]),
 
 
 });

@@ -2,10 +2,12 @@ import { ConvexError, v } from "convex/values";
 import { mutation } from "./_generated/server";
 import type { ChatAction } from "./_lib/chatActions";
 import { DEV_CHAT_ACTIONS } from "./_lib/chatActions";
+import { CANCELLABLE_STATUSES } from "./_lib/enums";
 import { getRoleOrThrow, loadReservationOrThrow } from "./_lib/reservationGuards";
 import { transitionReservationStatus } from "./_lib/reservationTransitions";
 import { releaseVehicleLocks } from "./_lib/vehicleLocks";
 import { authComponent } from "./auth";
+import { userKey } from "./_lib/userKey";
 
 type ActionResult =
   | { ok: true }
@@ -36,7 +38,7 @@ export const runChatAction = mutation({
   handler: async (ctx, args): Promise<ActionResult> => {
     const user = await authComponent.getAuthUser(ctx);
     if (!user) throw new ConvexError("Unauthenticated");
-    const me = String(user.userId ?? user.email ?? user._id);
+    const me = userKey(user);
     const action = args.action as ChatAction;
 
     if (process.env.NODE_ENV === "production" && DEV_CHAT_ACTIONS.has(action)) {

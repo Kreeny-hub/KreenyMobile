@@ -1,13 +1,14 @@
 import { cronJobs } from "convex/server";
-import { api } from "./_generated/api";
+import { internal } from "./_generated/api";
 
 const crons = cronJobs();
 
 // ✅ Toutes les 5 minutes : expire les réservations acceptées mais non payées
+// ✅ FIX: utilise `internal` car expireUnpaidReservations est maintenant une internalMutation
 crons.interval(
   "expire unpaid reservations",
   { minutes: 5 },
-  api.reservations.expireUnpaidReservations,
+  internal.reservations.expireUnpaidReservations,
   {}
 );
 

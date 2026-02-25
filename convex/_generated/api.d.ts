@@ -15,6 +15,7 @@ import type * as _lib_reservationEvents from "../_lib/reservationEvents.js";
 import type * as _lib_reservationGuards from "../_lib/reservationGuards.js";
 import type * as _lib_reservationStateMachine from "../_lib/reservationStateMachine.js";
 import type * as _lib_reservationTransitions from "../_lib/reservationTransitions.js";
+import type * as _lib_userKey from "../_lib/userKey.js";
 import type * as _lib_vehicleLocks from "../_lib/vehicleLocks.js";
 import type * as auth from "../auth.js";
 import type * as badges from "../badges.js";
@@ -48,6 +49,7 @@ declare const fullApi: ApiFromModules<{
   "_lib/reservationGuards": typeof _lib_reservationGuards;
   "_lib/reservationStateMachine": typeof _lib_reservationStateMachine;
   "_lib/reservationTransitions": typeof _lib_reservationTransitions;
+  "_lib/userKey": typeof _lib_userKey;
   "_lib/vehicleLocks": typeof _lib_vehicleLocks;
   auth: typeof auth;
   badges: typeof badges;
