@@ -62,26 +62,19 @@ export const searchVehicles = query({
   },
   handler: async (ctx, args) => {
     const limit = args.limit ?? 20;
-    const city = args.city?.trim();
+    const citySearch = args.city?.trim().toLowerCase();
 
-    // ✅ Optimisé : utilise l'index by_city_createdAt quand une ville est spécifiée
-    let results;
-    if (city && city.length > 0) {
-      results = await ctx.db
-        .query("vehicles")
-        .withIndex("by_city_createdAt", (q) => q.eq("city", city))
-        .order("desc")
-        .take(limit * 2); // prend plus pour compenser le filtrage isActive/prix
-    } else {
-      results = await ctx.db.query("vehicles").order("desc").take(limit * 2);
+    const all = await ctx.db.query("vehicles").order("desc").take(limit * 2);
+
+    let results = all;
+    if (citySearch && citySearch.length > 0) {
+      results = results.filter((v) => v.city.toLowerCase() === citySearch);
     }
-
-    // ✅ Filtre isActive + prix en mémoire, puis tronque
-    let filtered = results.filter(isVehicleActive);
     if (typeof args.maxPricePerDay === "number") {
-      filtered = filtered.filter((v) => v.pricePerDay <= args.maxPricePerDay!);
+      results = results.filter((v) => v.pricePerDay <= args.maxPricePerDay!);
     }
-    return filtered.slice(0, limit);
+
+    return results.slice(0, limit);
   },
 });
 
@@ -94,25 +87,20 @@ export const searchVehiclesWithCover = query({
   },
   handler: async (ctx, args) => {
     const limit = args.limit ?? 20;
-    const city = args.city?.trim();
+    const citySearch = args.city?.trim().toLowerCase();
 
-    // ✅ Optimisé : utilise l'index by_city_createdAt
-    let results;
-    if (city && city.length > 0) {
-      results = await ctx.db
-        .query("vehicles")
-        .withIndex("by_city_createdAt", (q) => q.eq("city", city))
-        .order("desc")
-        .take(limit * 2);
-    } else {
-      results = await ctx.db.query("vehicles").order("desc").take(limit * 2);
+    const all = await ctx.db.query("vehicles").order("desc").take(limit * 2);
+
+    let results = all;
+    if (citySearch && citySearch.length > 0) {
+      results = results.filter((v) => v.city.toLowerCase() === citySearch);
     }
-
-    let filtered = results.filter(isVehicleActive);
     if (typeof args.maxPricePerDay === "number") {
       filtered = filtered.filter((v) => v.pricePerDay <= args.maxPricePerDay!);
     }
     filtered = filtered.slice(0, limit);
+
+    results = results.slice(0, limit);
 
     const withCovers = [];
     for (const v of filtered) {

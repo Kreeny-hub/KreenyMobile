@@ -1,5 +1,6 @@
 import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import { computeActionsForStatus } from "./_lib/actionsByStatus";
 import { authComponent } from "./auth";
 import { userKey } from "./_lib/userKey";
 
@@ -168,53 +169,17 @@ export const refreshThreadActions = mutation({
     const key = `actions:${String(thread.reservationId)}`;
     const now = Date.now();
 
-    // cherche le message "actions" existant
     const existing = await ctx.db
       .query("messages")
       .withIndex("by_eventKey", (q) => q.eq("eventKey", key))
       .unique();
 
-    // calcule les actions selon le statut
-    let actions: { label: string; route: string }[] = [];
-    let visibility: "all" | "renter" | "owner" = "all";
-    let text = "Actions disponibles";
-
-    if (reservation.status === "requested") {
-      actions = [
-        { label: "Annuler la demande", route: "action:CANCEL_RESERVATION" },
-      ];
-      visibility = "renter";
-      text = "En attente de réponse du loueur";
-    } else if (reservation.status === "accepted_pending_payment") {
-      actions = [
-        { label: "Payer maintenant", route: "action:PAY_NOW" },
-        { label: "Annuler", route: "action:CANCEL_RESERVATION" },
-      ];
-      visibility = "renter";
-      text = "Paiement requis";
-    } else if (reservation.status === "pickup_pending") {
-      actions = [
-        { label: "Faire le constat départ", route: "action:DO_CHECKIN" },
-        { label: "Annuler", route: "action:CANCEL_RESERVATION" },
-      ];
-      visibility = "all";
-      text = "Constat départ requis";
-    } else if (reservation.status === "dropoff_pending") {
-      actions = [{ label: "Faire le constat retour", route: "action:DO_CHECKOUT" }];
-      visibility = "all";
-      text = "Constat retour requis";
-    } else if (
-      reservation.status === "completed" ||
-      reservation.status === "cancelled" ||
-      reservation.status === "rejected"
-    ) {
-      actions = [];
-      visibility = "all";
-      text = "Aucune action";
-    }
+    const { text, actions, visibility } = computeActionsForStatus(
+      reservation.status,
+      reservation.paymentStatus
+    );
 
     if (!existing) {
-      // ✅ création 1 seule fois
       await ctx.db.insert("messages", {
         threadId: thread._id,
         reservationId: thread.reservationId,
@@ -228,14 +193,7 @@ export const refreshThreadActions = mutation({
       return { ok: true, created: true };
     }
 
-    // ✅ mise à jour: patch SEULEMENT des champs modifiables
-    await ctx.db.patch(existing._id, {
-      text,
-      actions,
-      visibility,
-      // ✅ on ne touche PAS createdAt : le message "actions" reste stable
-    });
-
+    await ctx.db.patch(existing._id, { text, actions, visibility });
     return { ok: true, created: false };
   },
 });

@@ -383,7 +383,21 @@ export default function ThreadScreen() {
 
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
-  const [actionMsg, setActionMsg] = useState<any>(null);
+
+  const handleSend = async () => {
+    const text = draft.trim();
+    if (!text || !threadId || sending) return;
+    setSending(true);
+    try {
+      await sendMessage({ threadId: threadId as any, text });
+      setDraft("");
+      setTimeout(() => scrollToBottom(true), 100);
+    } catch (e) {
+      Alert.alert("Erreur", e instanceof Error ? e.message : "Erreur inconnue");
+    } finally {
+      setSending(false);
+    }
+  };
 
   const { listRef, scrollToBottom, onMessagesReady } = useChatScroll();
 
@@ -522,127 +536,144 @@ export default function ThreadScreen() {
             keyExtractor={(item: any) => String(item._id)}
             keyboardShouldPersistTaps="handled"
             keyboardDismissMode="interactive"
-            contentContainerStyle={{ paddingHorizontal: 14, paddingVertical: 8, paddingBottom: 10 }}
-            showsVerticalScrollIndicator={false}
-            onContentSizeChange={() => scrollToBottom(false)}
-            renderItem={({ item }: any) => {
-              // Date separator
-              if (item._type === "separator") {
-                return <DateSeparator label={item.label} colors={colors} />;
-              }
+            contentContainerStyle={{ paddingHorizontal: 16 }}
+            renderItem={({ item }) => (
+              <View style={{ paddingVertical: 8, borderBottomWidth: 1 }}>
+                <Text style={{ fontWeight: item.type === "system" ? "700" : "400" }}>
+                  {item.type === "system"
+                    ? "Système"
+                    : item.type === "actions"
+                      ? "Actions"
+                      : "Utilisateur"}{" "}
+                  : {item.text}
+                </Text>
 
-              // System message
-              if (item.type === "system") {
-                return (
-                  <SystemMessage
-                    text={item.text}
-                    threadId={threadId!}
-                    thread={thread}
-                    runAction={runAction}
-                    colors={colors}
-                    isDark={isDark}
-                  />
-                );
-              }
+                {!!item.actions?.length && (
+                  <View style={{ marginTop: 8, gap: 8 }}>
+                    {item.actions.map((a: { label: string; route: string }, idx: number) => (
+                      <Pressable
+                        key={idx}
+                        style={{
+                          borderWidth: 1,
+                          borderRadius: 10,
+                          paddingVertical: 10,
+                          paddingHorizontal: 12,
+                        }}
+                        onPress={() => {
+                          if (!threadId) return;
 
-              // Actions message
-              if (item.type === "actions" && item.actions?.length) {
-                return (
-                  <SystemMessage
-                    text={item.text}
-                    actions={item.actions}
-                    threadId={threadId!}
-                    thread={thread}
-                    runAction={runAction}
-                    colors={colors}
-                    isDark={isDark}
-                  />
-                );
-              }
+                          const doAction = async (actionName: string, successMsg: string) => {
+                            try {
+                              const res = await runAction({
+                                threadId: threadId as any,
+                                action: actionName as any,
+                              });
+                              if (!res.ok) {
+                                Alert.alert("Indisponible", "Cette action n’est plus disponible.");
+                                return;
+                              }
+                              Alert.alert("OK", successMsg);
+                            } catch (e) {
+                              Alert.alert("Erreur", e instanceof Error ? e.message : "Erreur inconnue");
+                            }
+                          };
 
-              // User message
-              if (item.type === "user") {
-                return (
-                  <UserBubble
-                    text={item.text}
-                    isMine={getIsMine(item)}
-                    time={item.createdAt}
-                    onLongPress={() => setActionMsg(item)}
-                    colors={colors}
-                    isDark={isDark}
-                  />
-                );
-              }
+                          const confirm = (title: string, msg: string, onConfirm: () => void) => {
+                            Alert.alert(title, msg, [
+                              { text: "Annuler", style: "cancel" },
+                              { text: "Confirmer", onPress: onConfirm },
+                            ]);
+                          };
 
-              // Fallback
-              return (
-                <View style={{ alignSelf: "center", paddingVertical: 4 }}>
-                  <Text style={{ fontSize: 12, color: colors.textTertiary }}>{item.text}</Text>
-                </View>
-              );
-            }}
+                          if (a.route === "action:ACCEPT") {
+                            confirm("Accepter la demande ?", "Le locataire devra ensuite payer pour confirmer.", () =>
+                              doAction("ACCEPT", "Demande acceptée."));
+                            return;
+                          }
+                          if (a.route === "action:REJECT") {
+                            confirm("Refuser la demande ?", "Les dates seront libérées.", () =>
+                              doAction("REJECT", "Demande refusée."));
+                            return;
+                          }
+                          if (a.route === "action:PAY_NOW") {
+                            confirm("Payer maintenant ?", "Le paiement sera initialisé.", () =>
+                              doAction("PAY_NOW", "Paiement initialisé."));
+                            return;
+                          }
+                          if (a.route === "action:DEV_MARK_PAID") {
+                            doAction("DEV_MARK_PAID", "Paiement simulé.");
+                            return;
+                          }
+                          if (a.route === "action:TRIGGER_RETURN") {
+                            confirm("Déclarer le retour ?", "La phase de constat retour sera lancée.", () =>
+                              doAction("TRIGGER_RETURN", "Retour déclaré. Constat retour requis."));
+                            return;
+                          }
+                          if (a.route === "action:OWNER_CANCEL") {
+                            confirm("Annuler la réservation ?", "Cette action est irréversible.", () =>
+                              doAction("OWNER_CANCEL", "Réservation annulée."));
+                            return;
+                          }
+
+                          if (!thread) return;
+                          const reservationId = String(thread.reservationId);
+
+                          if (a.route === "action:DO_CHECKIN") {
+                            router.push(`/reservation/${reservationId}/report?phase=checkin`);
+                            return;
+                          }
+                          if (a.route === "action:DO_CHECKOUT") {
+                            router.push(`/reservation/${reservationId}/report?phase=checkout`);
+                            return;
+                          }
+                          if (a.route === "action:OPEN_RESERVATION") {
+                            router.push(`/profile/reservations`);
+                            return;
+                          }
+                          if (a.route.startsWith("/")) router.push(a.route as any);
+                        }}
+                      >
+                        <Text style={{ fontWeight: "700" }}>{a.label}</Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                )}
+              </View>
+            )}
           />
         )}
 
-        {/* Input Bar — WhatsApp style */}
-        <View
-          style={{
-            flexDirection: "row", alignItems: "flex-end", gap: 10,
-            paddingHorizontal: 12, paddingVertical: 10,
-            borderTopWidth: 1,
-            borderTopColor: isDark ? colors.border : "rgba(0,0,0,0.05)",
-            backgroundColor: colors.bg,
-          }}
-        >
-          <View
+        {/* Barre d’écriture */}
+        <View style={{ borderTopWidth: 1, padding: 10, paddingHorizontal: 16, flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <TextInput
+            placeholder="Écris un message…"
+            value={draft}
+            onChangeText={setDraft}
+            onSubmitEditing={handleSend}
+            returnKeyType="send"
+            onFocus={() => setTimeout(() => scrollToBottom(true), 80)}
             style={{
-              flex: 1, flexDirection: "row", alignItems: "flex-end",
-              backgroundColor: colors.inputBg,
-              borderRadius: 22,
+              flex: 1,
               borderWidth: 1,
               borderColor: isDark ? colors.inputBorder : "rgba(0,0,0,0.06)",
               paddingHorizontal: 16,
               paddingVertical: Platform.OS === "ios" ? 10 : 6,
               minHeight: 44, maxHeight: 120,
             }}
-          >
-            <TextInput
-              testID="chat-input"
-              value={draft}
-              onChangeText={setDraft}
-              placeholder="Écris un message…"
-              placeholderTextColor={colors.inputPlaceholder}
-              multiline
-              autoCorrect
-              spellCheck
-              autoCapitalize="sentences"
-              returnKeyType="send"
-              blurOnSubmit={false}
-              onSubmitEditing={onSend}
-              onFocus={() => setTimeout(() => scrollToBottom(true), 80)}
-              style={{
-                flex: 1, fontSize: 15, color: colors.inputText,
-                maxHeight: 100, lineHeight: 20,
-              }}
-            />
-          </View>
-
+          />
           <Pressable
-            testID="chat-send-btn"
-            onPress={onSend}
+            onPress={handleSend}
             disabled={!draft.trim() || sending}
-            style={({ pressed }) => ({
-              width: 44, height: 44, borderRadius: 22,
-              backgroundColor: draft.trim() ? colors.primary : (isDark ? colors.bgTertiary : "#E8EBF0"),
-              alignItems: "center", justifyContent: "center",
-              opacity: pressed ? 0.75 : 1,
-            })}
+            style={{
+              backgroundColor: draft.trim() && !sending ? "#000" : "#ccc",
+              borderRadius: 10,
+              paddingVertical: 10,
+              paddingHorizontal: 16,
+            }}
           >
-            <Ionicons
-              name="send"
-              size={18}
-              color={draft.trim() ? "#FFF" : colors.textTertiary}
-            />
+            <Text style={{ color: "#fff", fontWeight: "700" }}>
+              {sending ? "..." : "Envoyer"}
+            </Text>
           </Pressable>
         </View>
       </KeyboardAvoidingView>
