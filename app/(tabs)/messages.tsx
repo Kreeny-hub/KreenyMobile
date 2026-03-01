@@ -1,19 +1,14 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useQuery } from "convex/react";
+import { useQuery, useMutation } from "convex/react";
 import { router } from "expo-router";
-import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  Animated,
-  FlatList,
-  Pressable,
-  Text,
-  TextInput,
-  View,
-} from "react-native";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { Animated, FlatList, TextInput, View, Alert } from "react-native";
+import { Swipeable } from "react-native-gesture-handler";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { api } from "../../convex/_generated/api";
 import { useAuthStatus } from "../../src/presentation/hooks/useAuthStatus";
-import { useTheme } from "../../src/theme";
+import { KText, KVStack, KRow, KPressable, KImage, KEmptyState, createStyles } from "../../src/ui";
+import { skeletonPulse } from "../../src/theme";
 
 // ═══════════════════════════════════════════════════════
 // Helpers — Smart time (Airbnb-like)
@@ -28,11 +23,9 @@ function formatTimeSmart(ts: number | string | undefined): string {
   if (!ts) return "";
   const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return "";
-
   const today = startOfDay(new Date());
   const day = startOfDay(d);
   const diff = Math.round((today.getTime() - day.getTime()) / 86400000);
-
   if (diff === 0) return d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
   if (diff === 1) return "Hier";
   if (diff >= 2 && diff <= 6) {
@@ -45,34 +38,20 @@ function formatTimeSmart(ts: number | string | undefined): string {
 // ═══════════════════════════════════════════════════════
 // Highlight text (search)
 // ═══════════════════════════════════════════════════════
-function HighlightText({
-  text,
-  query,
-  style,
-  highlightColor,
-  numberOfLines,
-}: {
-  text: string;
-  query: string;
-  style: any;
-  highlightColor: string;
-  numberOfLines?: number;
+function HighlightText({ text, query, style, highlightColor, numberOfLines }: {
+  text: string; query: string; style: any; highlightColor: string; numberOfLines?: number;
 }) {
   const t = String(text || "");
   const q = String(query || "").trim();
-  if (!q) return <Text style={style} numberOfLines={numberOfLines}>{t}</Text>;
-
+  if (!q) return <KText style={style} numberOfLines={numberOfLines}>{t}</KText>;
   const idx = t.toLowerCase().indexOf(q.toLowerCase());
-  if (idx === -1) return <Text style={style} numberOfLines={numberOfLines}>{t}</Text>;
-
+  if (idx === -1) return <KText style={style} numberOfLines={numberOfLines}>{t}</KText>;
   return (
-    <Text style={style} numberOfLines={numberOfLines}>
+    <KText style={style} numberOfLines={numberOfLines}>
       {t.slice(0, idx)}
-      <Text style={{ backgroundColor: highlightColor, borderRadius: 4 }}>
-        {t.slice(idx, idx + q.length)}
-      </Text>
+      <KText style={[style, { backgroundColor: highlightColor, borderRadius: 4 }]}>{t.slice(idx, idx + q.length)}</KText>
       {t.slice(idx + q.length)}
-    </Text>
+    </KText>
   );
 }
 
@@ -80,279 +59,410 @@ function HighlightText({
 // Skeleton
 // ═══════════════════════════════════════════════════════
 function MessagesSkeleton() {
-  const { colors } = useTheme();
+  const { styles, colors } = useSkeletonStyles();
   const pulse = useRef(new Animated.Value(0)).current;
-
   useEffect(() => {
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, { toValue: 1, duration: 700, useNativeDriver: true }),
-        Animated.timing(pulse, { toValue: 0, duration: 700, useNativeDriver: true }),
-      ])
-    );
+    const loop = skeletonPulse(pulse);
     loop.start();
     return () => loop.stop();
   }, []);
-
   const opacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.35, 0.75] });
-  const Box = ({ w, h, r = 8, style }: any) => (
-    <Animated.View style={[{ width: w, height: h, borderRadius: r, backgroundColor: colors.skeleton, opacity }, style]} />
+  const Box = ({ w, h, r = 8, style: s }: any) => (
+    <Animated.View style={[{ width: w, height: h, borderRadius: r, backgroundColor: colors.skeleton, opacity }, s]} />
   );
-
   return (
-    <View style={{ flex: 1, backgroundColor: colors.bg, paddingHorizontal: 14 }}>
-      {/* Search skeleton */}
+    <View style={styles.container}>
       <Box w="100%" h={40} r={12} style={{ marginTop: 10, marginBottom: 14 }} />
       {[0, 1, 2, 3].map((i) => (
-        <View key={i} style={{ flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 12 }}>
+        <KRow key={i} gap="sm" style={{ paddingVertical: 12, alignItems: "center" }}>
           <Box w={56} h={56} r={16} />
-          <View style={{ flex: 1, gap: 6 }}>
-            <Box w="55%" h={14} />
-            <Box w="40%" h={12} />
-            <Box w="75%" h={12} />
-          </View>
+          <KVStack gap={6} style={{ flex: 1 }}>
+            <Box w="55%" h={14} /><Box w="40%" h={12} /><Box w="75%" h={12} />
+          </KVStack>
           <Box w={34} h={12} />
-        </View>
+        </KRow>
       ))}
     </View>
   );
 }
+const useSkeletonStyles = createStyles((colors) => ({
+  container: { flex: 1, backgroundColor: colors.bg, paddingHorizontal: 14 },
+}));
 
 // ═══════════════════════════════════════════════════════
 // Not Authenticated
 // ═══════════════════════════════════════════════════════
-function NotAuthenticated({ colors, isDark }: { colors: any; isDark: boolean }) {
+function NotAuthenticated() {
+  const { styles, colors } = useNotAuthStyles();
   return (
-    <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 32, gap: 16 }}>
-      <View
-        style={{
-          width: 72, height: 72, borderRadius: 36,
-          backgroundColor: isDark ? colors.bgTertiary : "#F0F3FA",
-          alignItems: "center", justifyContent: "center",
-        }}
-      >
+    <KVStack align="center" justify="center" style={styles.container}>
+      <View style={styles.iconCircle}>
         <Ionicons name="chatbubbles-outline" size={28} color={colors.textTertiary} />
       </View>
-      <Text style={{ fontSize: 17, fontWeight: "700", color: colors.text, textAlign: "center" }}>
-        Connecte-toi pour voir tes conversations
-      </Text>
-      <Text style={{ fontSize: 14, color: colors.textSecondary, textAlign: "center", lineHeight: 20 }}>
-        Discute directement avec les propriétaires et locataires.
-      </Text>
-      <Pressable
-        testID="messages-login-btn"
-        onPress={() => router.push("/login")}
-        style={({ pressed }) => ({
-          backgroundColor: colors.primary, borderRadius: 14,
-          paddingVertical: 14, paddingHorizontal: 32,
-          opacity: pressed ? 0.85 : 1, marginTop: 8,
-        })}
-      >
-        <Text style={{ color: "#FFF", fontWeight: "800", fontSize: 15 }}>Se connecter</Text>
-      </Pressable>
-    </View>
+      <KText variant="h3" bold center>Inscris-toi pour voir tes conversations</KText>
+      <KText variant="bodySmall" color="textSecondary" center style={{ lineHeight: 20 }}>
+        Échangez directement avec la communauté Kreeny.
+      </KText>
+      <KPressable testID="messages-login-btn" onPress={() => router.push("/signup")} style={styles.loginBtn}>
+        <KText variant="label" bold color="textInverse">Créer un compte</KText>
+      </KPressable>
+      <KPressable onPress={() => router.push("/login")}>
+        <KText variant="bodySmall" color="textSecondary">Déjà un compte ? <KText variant="bodySmall" bold style={{ color: colors.primary }}>Se connecter</KText></KText>
+      </KPressable>
+    </KVStack>
   );
 }
+const useNotAuthStyles = createStyles((colors, isDark) => ({
+  container: { flex: 1, padding: 32, gap: 16 },
+  iconCircle: {
+    width: 72, height: 72, borderRadius: 36,
+    backgroundColor: isDark ? colors.bgTertiary : "#F0F3FA",
+    alignItems: "center", justifyContent: "center",
+  },
+  loginBtn: {
+    backgroundColor: colors.primary, borderRadius: 14,
+    paddingVertical: 14, paddingHorizontal: 32, marginTop: 8,
+  },
+}));
 
 // ═══════════════════════════════════════════════════════
-// Empty State
+// Thread Card — Premium (véhicule + nom + dernier msg)
 // ═══════════════════════════════════════════════════════
-function EmptyState({ colors, isDark, hasQuery }: { colors: any; isDark: boolean; hasQuery: boolean }) {
-  return (
-    <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 32, gap: 14 }}>
-      <View
-        style={{
-          width: 64, height: 64, borderRadius: 32,
-          backgroundColor: isDark ? colors.bgTertiary : "#F0F3FA",
-          alignItems: "center", justifyContent: "center",
-        }}
-      >
-        <Ionicons name={hasQuery ? "search-outline" : "chatbubble-outline"} size={26} color={colors.textTertiary} />
-      </View>
-      <Text style={{ fontSize: 16, fontWeight: "700", color: colors.text, textAlign: "center" }}>
-        {hasQuery ? "Aucun résultat" : "Aucune conversation"}
-      </Text>
-      <Text style={{ fontSize: 13, color: colors.textSecondary, textAlign: "center", lineHeight: 19 }}>
-        {hasQuery
-          ? "Essaie avec un autre mot-clé."
-          : "Une conversation se crée automatiquement quand tu envoies une demande de réservation."}
-      </Text>
-    </View>
-  );
-}
-
-// ═══════════════════════════════════════════════════════
-// Thread Card — WhatsApp/Airbnb style
-// ═══════════════════════════════════════════════════════
-function ThreadCard({
-  thread,
-  query,
-  colors,
-  isDark,
-}: {
-  thread: any;
-  query: string;
-  colors: any;
-  isDark: boolean;
+function ThreadCard({ thread, query, tab, onArchiveToggle }: {
+  thread: any; query: string; tab: string; onArchiveToggle: (thread: any) => void;
 }) {
+  const { styles, colors, isDark } = useThreadStyles();
   const lastTime = thread.lastMessageAt ?? thread.createdAt;
-  const highlightColor = isDark ? "rgba(96,165,250,0.25)" : "rgba(59,130,246,0.15)";
+  const highlightColor = isDark ? "rgba(224,36,94,0.25)" : "rgba(224,36,94,0.18)";
+  const hasUnread = !!thread.hasUnread;
+  const swipeRef = useRef<Swipeable>(null);
+
+  const isArchived = tab === "archived";
+  const actionLabel = isArchived ? "Désarchiver" : "Archiver";
+  const actionIcon = isArchived ? "arrow-undo-outline" : "archive-outline";
+
+  const renderSwipeAction = () => (
+    <KPressable
+      onPress={() => {
+        swipeRef.current?.close();
+        onArchiveToggle(thread);
+      }}
+      style={styles.swipeAction}
+    >
+      <Ionicons name={actionIcon as any} size={18} color="#FFF" />
+      <KText variant="caption" bold style={{ color: "#FFF", fontSize: 11 }}>{actionLabel}</KText>
+    </KPressable>
+  );
+
+  // Dernier message preview
+  const lastText = thread.lastMessageText || "Aucun message";
+  const isFromMe = thread.lastMessageIsFromMe;
 
   return (
-    <Pressable
-      testID={`thread-card-${String(thread._id)}`}
-      onPress={() => router.push(`/messages/${String(thread._id)}`)}
-      style={({ pressed }) => ({
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 12,
-        padding: 14,
-        borderRadius: 20,
-        backgroundColor: colors.card,
-        borderWidth: 1,
-        borderColor: isDark ? colors.cardBorder : "rgba(0,0,0,0.05)",
-        marginBottom: 10,
-        opacity: pressed ? 0.85 : 1,
-      })}
+    <Swipeable
+      ref={swipeRef}
+      overshootLeft={false}
+      overshootRight={false}
+      renderLeftActions={renderSwipeAction}
+      renderRightActions={renderSwipeAction}
     >
-      {/* Media wrap — vehicle fallback + user overlay */}
-      <View style={{ width: 56, height: 56, borderRadius: 16, position: "relative" }}>
-        <View
-          style={{
-            width: 56, height: 56, borderRadius: 16,
-            backgroundColor: colors.primaryLight,
-            alignItems: "center", justifyContent: "center",
-          }}
-        >
-          <Ionicons name="car-sport" size={22} color={colors.primary} />
+      <KPressable
+        testID={`thread-card-${String(thread._id)}`}
+        onPress={() => router.push(`/messages/${String(thread._id)}`)}
+        onLongPress={() => {
+          Alert.alert(
+            actionLabel,
+            isArchived ? "Remettre dans les conversations actives ?" : "Archiver cette conversation ?",
+            [
+              { text: "Annuler", style: "cancel" },
+              { text: actionLabel, style: isArchived ? "default" : "destructive", onPress: () => onArchiveToggle(thread) },
+            ]
+          );
+        }}
+        style={styles.card}
+      >
+        {/* Thumbnail véhicule + avatar overlay */}
+        <View style={{ width: 60, height: 60, borderRadius: 18, position: "relative" }}>
+          {thread.vehicleCoverUrl ? (
+            <KImage source={{ uri: thread.vehicleCoverUrl }} style={styles.vehicleImg} />
+          ) : (
+            <View style={[styles.vehicleImg, styles.vehicleFallback]}>
+              <Ionicons name="car-sport" size={22} color={colors.primary} />
+            </View>
+          )}
+          {thread.otherAvatarUrl ? (
+            <KImage source={{ uri: thread.otherAvatarUrl }} style={styles.avatarOverlay} />
+          ) : (
+            <View style={[styles.avatarOverlay, styles.avatarFallback]}>
+              <Ionicons name="person" size={12} color="#FFF" />
+            </View>
+          )}
         </View>
-        {/* User avatar overlay */}
-        <View
-          style={{
-            position: "absolute", right: -4, bottom: -4,
-            width: 24, height: 24, borderRadius: 12,
-            borderWidth: 2, borderColor: colors.card,
-            backgroundColor: isDark ? colors.bgTertiary : "rgba(0,0,0,0.2)",
-            alignItems: "center", justifyContent: "center",
-          }}
-        >
-          <Ionicons name="person" size={12} color="#FFF" />
-        </View>
-      </View>
 
-      {/* Content */}
-      <View style={{ flex: 1 }}>
-        {/* Top row: title + time */}
-        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+        {/* Content */}
+        <View style={{ flex: 1 }}>
+          {/* Row 1: Titre véhicule + date + badge */}
+          <KRow justify="space-between" gap="sm" style={{ alignItems: "center" }}>
+            <HighlightText
+              text={thread.vehicleTitle || "Discussion"}
+              query={query}
+              style={{ flex: 1, fontSize: 15, fontWeight: hasUnread ? "900" : "700", color: colors.text }}
+              highlightColor={highlightColor}
+              numberOfLines={1}
+            />
+            <KRow gap={6} style={{ alignItems: "center", marginLeft: 8 }}>
+              <KText variant="caption" color={hasUnread ? "text" : "textTertiary"} bold={hasUnread} style={{ fontSize: 11 }}>
+                {formatTimeSmart(lastTime)}
+              </KText>
+
+              {/* Read receipts si dernier msg de moi */}
+              {isFromMe && !hasUnread ? (
+                <Ionicons
+                  name={thread.isLastReadByOther ? "checkmark-done" : "checkmark"}
+                  size={15}
+                  color={thread.isLastReadByOther ? colors.primary : colors.textTertiary}
+                />
+              ) : null}
+
+              {/* Badge non-lu */}
+              {hasUnread ? (
+                <View style={styles.unreadBadge}>
+                  <KText variant="caption" bold style={{ color: "#FFF", fontSize: 10 }}>1</KText>
+                </View>
+              ) : null}
+
+              <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
+            </KRow>
+          </KRow>
+
+          {/* Row 2: Nom de l'autre utilisateur */}
           <HighlightText
-            text="Conversation"
+            text={thread.otherDisplayName || "Utilisateur"}
             query={query}
-            style={{ flex: 1, fontSize: 15, fontWeight: "800", color: colors.text }}
+            style={{ fontSize: 13, fontWeight: "600", color: colors.text, marginTop: 2 }}
             highlightColor={highlightColor}
             numberOfLines={1}
           />
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-            <Text style={{ fontSize: 11, fontWeight: "600", color: colors.textTertiary }}>
-              {formatTimeSmart(lastTime)}
-            </Text>
-            <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
-          </View>
-        </View>
 
-        {/* Reservation ref */}
-        <Text numberOfLines={1} style={{ fontSize: 13, fontWeight: "600", color: colors.textSecondary, marginTop: 2 }}>
-          Réservation #{String(thread.reservationId).slice(-6)}
-        </Text>
-      </View>
-    </Pressable>
+          {/* Row 3: Preview du dernier message */}
+          <KRow style={{ marginTop: 2 }}>
+            {isFromMe ? (
+              <KText variant="caption" color="textTertiary" style={{ fontSize: 12, fontWeight: "600" }}>Vous : </KText>
+            ) : null}
+            <HighlightText
+              text={lastText}
+              query={query}
+              style={{
+                flex: 1,
+                fontSize: 12,
+                fontWeight: hasUnread ? "600" : "400",
+                color: hasUnread ? colors.text : colors.textSecondary,
+                lineHeight: 17,
+              }}
+              highlightColor={highlightColor}
+              numberOfLines={1}
+            />
+          </KRow>
+        </View>
+      </KPressable>
+    </Swipeable>
   );
 }
+
+const useThreadStyles = createStyles((colors, isDark) => ({
+  card: {
+    flexDirection: "row", alignItems: "center", gap: 12, padding: 14,
+    borderRadius: 20, backgroundColor: colors.card,
+    borderWidth: 1, borderColor: isDark ? colors.cardBorder : "rgba(0,0,0,0.05)",
+    marginBottom: 10,
+  },
+  vehicleImg: {
+    width: 60, height: 60, borderRadius: 18, backgroundColor: colors.bgTertiary,
+  },
+  vehicleFallback: {
+    alignItems: "center" as const, justifyContent: "center" as const,
+    backgroundColor: isDark ? colors.bgTertiary : colors.primaryLight,
+  },
+  avatarOverlay: {
+    position: "absolute" as const, right: -4, bottom: -4,
+    width: 26, height: 26, borderRadius: 13, borderWidth: 2, borderColor: colors.card,
+    backgroundColor: colors.bgTertiary,
+  },
+  avatarFallback: {
+    backgroundColor: isDark ? colors.bgTertiary : "rgba(0,0,0,0.25)",
+    alignItems: "center" as const, justifyContent: "center" as const,
+  },
+  unreadBadge: {
+    minWidth: 18, height: 18, paddingHorizontal: 5, borderRadius: 999,
+    backgroundColor: "#E0245E",
+    alignItems: "center" as const, justifyContent: "center" as const,
+  },
+  swipeAction: {
+    width: 88, justifyContent: "center" as const, alignItems: "center" as const,
+    gap: 4, backgroundColor: isDark ? "#333" : "#111",
+    borderRadius: 18, marginBottom: 10,
+  },
+}));
+
+// ═══════════════════════════════════════════════════════
+// Tabs (Actifs / Archivés)
+// ═══════════════════════════════════════════════════════
+function TabSwitch({ tab, onChangeTab, activeCount, archivedCount }: {
+  tab: string; onChangeTab: (t: string) => void; activeCount: number; archivedCount: number;
+}) {
+  const { styles, colors } = useTabStyles();
+  return (
+    <KRow style={styles.tabsRow}>
+      <KPressable
+        onPress={() => onChangeTab("active")}
+        style={[styles.tabBtn, tab === "active" && styles.tabBtnActive]}
+      >
+        <KText
+          variant="caption"
+          bold
+          style={[styles.tabLabel, tab === "active" && { color: colors.text }]}
+        >
+          Actifs ({activeCount})
+        </KText>
+      </KPressable>
+      <KPressable
+        onPress={() => onChangeTab("archived")}
+        style={[styles.tabBtn, tab === "archived" && styles.tabBtnActive]}
+      >
+        <KText
+          variant="caption"
+          bold
+          style={[styles.tabLabel, tab === "archived" && { color: colors.text }]}
+        >
+          Archivés ({archivedCount})
+        </KText>
+      </KPressable>
+    </KRow>
+  );
+}
+const useTabStyles = createStyles((colors, isDark) => ({
+  tabsRow: {
+    backgroundColor: isDark ? colors.bgTertiary : "rgba(0,0,0,0.04)",
+    borderRadius: 12, padding: 3, marginTop: 10,
+  },
+  tabBtn: {
+    flex: 1, height: 32, borderRadius: 10,
+    alignItems: "center" as const, justifyContent: "center" as const,
+  },
+  tabBtnActive: {
+    backgroundColor: colors.card,
+    borderWidth: 1, borderColor: isDark ? colors.cardBorder : "rgba(0,0,0,0.08)",
+  },
+  tabLabel: {
+    fontSize: 12, color: colors.textTertiary,
+  },
+}));
 
 // ═══════════════════════════════════════════════════════
 // MAIN
 // ═══════════════════════════════════════════════════════
 export default function MessagesScreen() {
-  const { colors, isDark } = useTheme();
+  const { styles, colors } = useStyles();
   const { isLoading, isAuthenticated } = useAuthStatus();
   const [query, setQuery] = useState("");
+  const [tab, setTab] = useState("active");
   const insets = useSafeAreaInsets();
 
-  const threads = useQuery(api.chat.listMyThreads, isAuthenticated ? {} : "skip");
+  const setArchived = useMutation(api.chat.setArchived);
 
-  // Filter threads by search query
+  // ✅ Deux queries séparées pour active et archived (compteurs)
+  const activeThreads = useQuery(api.chat.listMyThreads, isAuthenticated ? { includeArchived: false } : "skip");
+  const archivedThreads = useQuery(api.chat.listMyThreads, isAuthenticated ? { includeArchived: true } : "skip");
+
+  const threads = tab === "active" ? activeThreads : archivedThreads;
+
   const filtered = useMemo(() => {
     if (!threads) return [];
     const q = query.trim().toLowerCase();
     if (!q) return threads;
     return threads.filter((t: any) => {
-      const resId = String(t.reservationId || "").toLowerCase();
-      return resId.includes(q);
+      const vehicleTitle = String(t.vehicleTitle || "").toLowerCase();
+      const otherName = String(t.otherDisplayName || "").toLowerCase();
+      const lastText = String(t.lastMessageText || "").toLowerCase();
+      return vehicleTitle.includes(q) || otherName.includes(q) || lastText.includes(q);
     });
   }, [threads, query]);
 
-  if (isLoading) return <MessagesSkeleton />;
+  const handleArchiveToggle = useCallback(async (thread: any) => {
+    const isCurrentlyArchived = tab === "archived";
+    try {
+      await setArchived({ threadId: thread._id, archived: !isCurrentlyArchived });
+    } catch (e) {
+      console.log("Archive error:", e);
+    }
+  }, [tab, setArchived]);
 
+  const handleChangeTab = useCallback((t: string) => {
+    setTab(t);
+    setQuery("");
+  }, []);
+
+  if (isLoading) return <MessagesSkeleton />;
   if (!isAuthenticated) {
     return (
       <View testID="messages-screen" style={{ flex: 1, backgroundColor: colors.bg }}>
-        <NotAuthenticated colors={colors} isDark={isDark} />
+        <NotAuthenticated />
       </View>
     );
   }
-
   if (threads === undefined) return <MessagesSkeleton />;
+
+  const emptyTitle = query?.trim()
+    ? "Aucun résultat"
+    : tab === "active"
+      ? "Aucune conversation active"
+      : "Aucune conversation archivée";
+
+  const emptySubtitle = query?.trim()
+    ? "Essaie avec un nom, un véhicule ou un mot du dernier message."
+    : tab === "active"
+      ? "Une conversation se crée automatiquement quand tu envoies une demande de réservation."
+      : "Les conversations archivées (manuellement ou automatiquement) apparaîtront ici.";
 
   return (
     <View testID="messages-screen" style={{ flex: 1, backgroundColor: colors.bg }}>
-      {/* Header */}
       <View style={{ paddingHorizontal: 18, paddingTop: insets.top + 8, paddingBottom: 4 }}>
-        <Text style={{ fontSize: 28, fontWeight: "800", color: colors.text, letterSpacing: -0.5 }}>
-          Messages
-        </Text>
-        <Text style={{ fontSize: 13, color: colors.textSecondary, marginTop: 2 }}>
-          Tes conversations
-        </Text>
-      </View>
+        <KText variant="displayMedium">Messages</KText>
+        <KText variant="bodySmall" color="textSecondary" style={{ marginTop: 2 }}>Vos conversations</KText>
 
-      {/* Search bar */}
-      {threads.length > 0 && (
-        <View style={{ paddingHorizontal: 14, paddingTop: 10, paddingBottom: 6 }}>
-          <View
-            style={{
-              flexDirection: "row", alignItems: "center", gap: 8,
-              height: 40, paddingHorizontal: 12,
-              borderRadius: 12,
-              backgroundColor: isDark ? colors.bgTertiary : "rgba(0,0,0,0.04)",
-              borderWidth: 1,
-              borderColor: isDark ? colors.border : "rgba(0,0,0,0.05)",
-            }}
-          >
+        {/* Search */}
+        <View style={{ paddingTop: 10 }}>
+          <KRow gap="sm" style={styles.searchBar}>
             <Ionicons name="search" size={16} color={colors.textTertiary} />
             <TextInput
-              testID="messages-search-input"
-              value={query}
-              onChangeText={setQuery}
-              placeholder="Rechercher une conversation…"
-              placeholderTextColor={colors.inputPlaceholder}
-              style={{
-                flex: 1, height: 40, fontSize: 13, fontWeight: "500",
-                color: colors.inputText,
-              }}
-              returnKeyType="search"
-              autoCapitalize="none"
-              autoCorrect={false}
+              testID="messages-search-input" value={query} onChangeText={setQuery}
+              placeholder="Rechercher une conversation…" placeholderTextColor={colors.inputPlaceholder}
+              style={styles.searchInput} returnKeyType="search" autoCapitalize="none" autoCorrect={false}
             />
             {query.length > 0 && (
-              <Pressable testID="messages-search-clear" onPress={() => setQuery("")} hitSlop={8}>
+              <KPressable testID="messages-search-clear" onPress={() => setQuery("")}>
                 <Ionicons name="close-circle" size={18} color={colors.textTertiary} />
-              </Pressable>
+              </KPressable>
             )}
-          </View>
+          </KRow>
         </View>
-      )}
+
+        {/* Tabs */}
+        <TabSwitch
+          tab={tab}
+          onChangeTab={handleChangeTab}
+          activeCount={activeThreads?.length ?? 0}
+          archivedCount={archivedThreads?.length ?? 0}
+        />
+      </View>
 
       {filtered.length === 0 ? (
-        <EmptyState colors={colors} isDark={isDark} hasQuery={query.trim().length > 0} />
+        <KVStack align="center" justify="center" style={{ flex: 1, padding: 24 }}>
+          <KText variant="label" bold center>{emptyTitle}</KText>
+          <KText variant="bodySmall" color="textSecondary" center style={{ lineHeight: 20, marginTop: 6 }}>
+            {emptySubtitle}
+          </KText>
+        </KVStack>
       ) : (
         <FlatList
           data={filtered}
@@ -360,10 +470,26 @@ export default function MessagesScreen() {
           contentContainerStyle={{ padding: 14, paddingBottom: 24 }}
           showsVerticalScrollIndicator={false}
           renderItem={({ item }) => (
-            <ThreadCard thread={item} query={query} colors={colors} isDark={isDark} />
+            <ThreadCard
+              thread={item}
+              query={query}
+              tab={tab}
+              onArchiveToggle={handleArchiveToggle}
+            />
           )}
         />
       )}
     </View>
   );
 }
+
+const useStyles = createStyles((colors, isDark) => ({
+  searchBar: {
+    height: 40, paddingHorizontal: 12, borderRadius: 12, alignItems: "center",
+    backgroundColor: isDark ? colors.bgTertiary : "rgba(0,0,0,0.04)",
+    borderWidth: 1, borderColor: isDark ? colors.border : "rgba(0,0,0,0.05)",
+  },
+  searchInput: {
+    flex: 1, height: 40, fontSize: 13, fontWeight: "500", color: colors.inputText,
+  },
+}));

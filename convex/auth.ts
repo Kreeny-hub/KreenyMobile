@@ -10,14 +10,37 @@ import authConfig from "./auth.config";
 export const authComponent = createClient<DataModel>(components.betterAuth);
 
 export const createAuth = (ctx: GenericCtx<DataModel>) => {
+  // Social providers (conditional: only enabled if env vars are set)
+  const socialProviders: Record<string, any> = {};
+
+  if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+    socialProviders.google = {
+      clientId: process.env.GOOGLE_CLIENT_ID,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+    };
+  }
+
+  if (process.env.APPLE_CLIENT_ID && process.env.APPLE_CLIENT_SECRET) {
+    socialProviders.apple = {
+      clientId: process.env.APPLE_CLIENT_ID,
+      clientSecret: process.env.APPLE_CLIENT_SECRET,
+    };
+  }
+
+  if (process.env.FACEBOOK_CLIENT_ID && process.env.FACEBOOK_CLIENT_SECRET) {
+    socialProviders.facebook = {
+      clientId: process.env.FACEBOOK_CLIENT_ID,
+      clientSecret: process.env.FACEBOOK_CLIENT_SECRET,
+    };
+  }
+
   return betterAuth({
     trustedOrigins: [
-  "kreeny://",
-  // Dev Expo Go (réseau local)
-  "exp://",
-  "exp://**",
-  "exp://192.168.*.*:*/**",
-],
+      "kreeny://",
+      "exp://",
+      "exp://**",
+      "exp://192.168.*.*:*/**",
+    ],
 
     database: authComponent.adapter(ctx),
 
@@ -25,6 +48,9 @@ export const createAuth = (ctx: GenericCtx<DataModel>) => {
       enabled: true,
       requireEmailVerification: false,
     },
+
+    socialProviders:
+      Object.keys(socialProviders).length > 0 ? socialProviders : undefined,
 
     plugins: [expo(), convex({ authConfig })],
   } satisfies BetterAuthOptions);
@@ -36,7 +62,6 @@ export const getCurrentUser = query({
     try {
       return await authComponent.getAuthUser(ctx);
     } catch {
-      // Pas connecté (ou token pas encore attaché) => on renvoie null, jamais d'erreur
       return null;
     }
   },

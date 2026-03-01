@@ -1,454 +1,667 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Animated,
   Dimensions,
   FlatList,
-  Image,
-  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
-  Pressable,
   ScrollView,
-  Text,
   TextInput,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
-import { useTheme, spacing, radius, shadows } from "../../src/theme";
+import { haptic, shadows, skeletonPulse, pulseOpacity } from "../../src/theme";
+import { KFavoriteButton } from "../../src/components/KFavoriteButton";
+
+import {
+  KText,
+  KRow,
+  KVStack,
+  KPressable,
+  KImage,
+  createStyles,
+} from "../../src/ui";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
 // ═══════════════════════════════════════════════════════
-// Active chips helper
+// Constants & helpers
 // ═══════════════════════════════════════════════════════
-function makeActiveChips(city: string, maxPrice: string, q: string) {
+const TRANSMISSION_LABELS: Record<string, string> = { auto: "Auto", manual: "Manuelle" };
+const FUEL_LABELS: Record<string, string> = { essence: "Essence", diesel: "Diesel", hybrid: "Hybride", electric: "Électrique" };
+
+function formatDateChip(iso: string): string {
+  const [, m, d] = iso.split("-").map(Number);
+  const months = ["janv","fév","mars","avr","mai","juin","juil","août","sept","oct","nov","déc"];
+  return `${d} ${months[(m || 1) - 1]}`;
+}
+
+const CATEGORIES = [
+  { key: "suv", label: "SUV" },
+  { key: "berline", label: "Berline" },
+  { key: "sport", label: "Sport" },
+  { key: "electric", label: "Électrique" },
+  { key: "premium", label: "Premium" },
+  { key: "utilitaire", label: "Utilitaire" },
+] as const;
+
+type Filters = {
+  q: string; city: string; minPrice: string; maxPrice: string;
+  transmission: string; fuel: string; minSeats: string;
+};
+
+function makeActiveChips(f: Filters) {
   const chips: { key: string; label: string }[] = [];
-  if (q.trim()) chips.push({ key: "q", label: `"${q.trim()}"` });
-  if (city.trim()) chips.push({ key: "city", label: city.trim() });
-  if (maxPrice.trim()) chips.push({ key: "maxPrice", label: `≤ ${maxPrice} MAD` });
+  if (f.q.trim()) chips.push({ key: "q", label: `"${f.q.trim()}"` });
+  if (f.city.trim()) chips.push({ key: "city", label: f.city.trim() });
+  if (f.minPrice && f.maxPrice) chips.push({ key: "price", label: `${f.minPrice}–${f.maxPrice} MAD` });
+  else if (f.maxPrice) chips.push({ key: "maxPrice", label: `≤ ${f.maxPrice} MAD` });
+  else if (f.minPrice) chips.push({ key: "minPrice", label: `≥ ${f.minPrice} MAD` });
+  if (f.transmission) chips.push({ key: "transmission", label: TRANSMISSION_LABELS[f.transmission] ?? f.transmission });
+  if (f.fuel) chips.push({ key: "fuel", label: FUEL_LABELS[f.fuel] ?? f.fuel });
+  if (f.minSeats) chips.push({ key: "minSeats", label: `${f.minSeats}+ places` });
   return chips;
 }
 
-// ═══════════════════════════════════════════════════════
-// Chip
-// ═══════════════════════════════════════════════════════
-function Chip({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
-  const { colors, isDark } = useTheme();
-  return (
-    <Pressable
-      onPress={onPress}
-      style={{
-        paddingHorizontal: 14,
-        paddingVertical: 9,
-        borderRadius: 999,
-        backgroundColor: active ? (isDark ? colors.primaryMuted : "rgba(0,0,0,0.08)") : colors.card,
-        borderWidth: 1,
-        borderColor: active ? (isDark ? colors.primary : "rgba(0,0,0,0.12)") : (isDark ? colors.cardBorder : "rgba(0,0,0,0.06)"),
-      }}
-    >
-      <Text style={{ fontSize: 13, fontWeight: active ? "700" : "600", color: active ? colors.text : colors.textSecondary }}>
-        {label}
-      </Text>
-    </Pressable>
-  );
-}
+
 
 // ═══════════════════════════════════════════════════════
-// Search Result Card (full-width, image carousel)
+// Search Result Card — Conversion-optimized
 // ═══════════════════════════════════════════════════════
 function SearchResultCard({ vehicle, onPress }: { vehicle: any; onPress: () => void }) {
-  const { colors, isDark } = useTheme();
-  const [page, setPage] = useState(0);
+  const { styles, colors } = useResultCardStyles();
   const cardW = SCREEN_WIDTH - 32;
-  const imgH = 220;
+  const imgH = 200;
+  const [activeImg, setActiveImg] = useState(0);
 
-  // Images: on a coverUrl + potentiellement imageUrls
-  // Pour l'instant on utilise coverUrl comme seule image visible
-  // (le backend résout seulement la cover dans searchVehiclesWithCover)
-  const images = vehicle.coverUrl ? [vehicle.coverUrl] : [];
+  const isNew = !vehicle.reviewCount || vehicle.reviewCount === 0;
+  const hasReviews = vehicle.reviewCount > 0;
+  const images: string[] = vehicle.allImageUrls?.length > 0
+    ? vehicle.allImageUrls : vehicle.coverUrl ? [vehicle.coverUrl] : [];
+
+  // Urgency signal — simulated based on data
+  const urgencyText = hasReviews && vehicle.reviewCount >= 3
+    ? "Très demandé" : hasReviews ? "Populaire" : null;
 
   return (
-    <View
-      style={{
-        alignSelf: "center",
-        marginBottom: 16,
-        borderRadius: 20,
-        overflow: "hidden",
-        backgroundColor: colors.card,
-        borderWidth: isDark ? 1 : 1,
-        borderColor: isDark ? colors.cardBorder : "rgba(0,0,0,0.06)",
-      }}
-    >
-      {/* Image carousel */}
-      <Pressable onPress={onPress}>
+    <View style={styles.card}>
+      {/* Image carousel — FlatList for reliable nested scroll */}
+      <View style={styles.imageWrap}>
         {images.length > 0 ? (
-          <View style={{ width: cardW, height: imgH, backgroundColor: colors.bgTertiary }}>
-            <ScrollView
+          <>
+            <FlatList
+              data={images}
+              keyExtractor={(_, i) => String(i)}
               horizontal
               pagingEnabled
               showsHorizontalScrollIndicator={false}
-              decelerationRate="fast"
-              snapToInterval={cardW}
-              onScroll={(e) => {
+              nestedScrollEnabled
+              bounces={false}
+              onMomentumScrollEnd={(e) => {
                 const idx = Math.round(e.nativeEvent.contentOffset.x / cardW);
-                if (idx !== page) setPage(idx);
+                if (idx !== activeImg) haptic.light();
+                setActiveImg(idx);
               }}
               scrollEventThrottle={16}
-            >
-              {images.map((uri: string, i: number) => (
-                <Image
-                  key={`${uri}-${i}`}
-                  source={{ uri }}
-                  style={{ width: cardW, height: imgH }}
-                  resizeMode="cover"
-                />
-              ))}
-            </ScrollView>
-
-            {/* Dots */}
+              renderItem={({ item: url }) => (
+                <KPressable onPress={onPress} activeOpacity={0.95}>
+                  <KImage source={{ uri: url }}
+                    style={[styles.cardImage, { width: cardW, height: imgH }]} />
+                </KPressable>
+              )}
+            />
+            {/* Pagination: dots if ≤5 images, counter if more */}
             {images.length > 1 && (
-              <View style={{
-                position: "absolute", bottom: 10, left: 0, right: 0,
-                flexDirection: "row", justifyContent: "center", gap: 6,
-              }}>
-                {images.slice(0, 6).map((_: string, i: number) => (
-                  <View key={i} style={{
-                    width: 6, height: 6, borderRadius: 3,
-                    backgroundColor: i === page ? "rgba(255,255,255,0.95)" : "rgba(255,255,255,0.55)",
-                  }} />
-                ))}
-              </View>
+              images.length <= 5 ? (
+                <View style={styles.dotsRow} pointerEvents="none">
+                  {images.map((_, i) => (
+                    <View key={i}
+                      style={[styles.dot, i === activeImg && styles.dotActive]} />
+                  ))}
+                </View>
+              ) : (
+                <View style={styles.imgCounter} pointerEvents="none">
+                  <KText variant="caption" bold style={styles.imgCounterText}>
+                    {activeImg + 1}/{images.length}
+                  </KText>
+                </View>
+              )
             )}
-          </View>
+          </>
         ) : (
-          <View style={{
-            width: cardW, height: imgH * 0.55,
-            backgroundColor: colors.bgTertiary,
-            alignItems: "center", justifyContent: "center",
-          }}>
-            <Ionicons name="car-outline" size={36} color={colors.textTertiary} />
-          </View>
+          <KPressable onPress={onPress} activeOpacity={0.95}>
+            <KVStack align="center" justify="center" style={[styles.noImage, { width: cardW, height: imgH * 0.6 }]}>
+              <Ionicons name="car-outline" size={36} color={colors.textTertiary} />
+            </KVStack>
+          </KPressable>
         )}
-      </Pressable>
-
-      {/* Body */}
-      <View style={{ paddingHorizontal: 14, paddingVertical: 12 }}>
-        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
-          <Text numberOfLines={1} style={{ flex: 1, fontSize: 15, fontWeight: "800", color: colors.text }}>
-            {vehicle.title}
-          </Text>
-          <Text style={{ fontSize: 14, fontWeight: "800", color: colors.text }}>
-            {vehicle.pricePerDay} MAD <Text style={{ fontSize: 12, fontWeight: "400", color: colors.textSecondary }}>/jour</Text>
-          </Text>
+        {/* Heart */}
+        <View style={styles.cardHeart}>
+          <KFavoriteButton vehicleId={vehicle._id} size={18} variant="overlay" />
         </View>
-
-        <View style={{ marginTop: 6, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-            <Ionicons name="location-outline" size={13} color={colors.textSecondary} />
-            <Text numberOfLines={1} style={{ fontSize: 13, color: colors.textSecondary }}>
-              {vehicle.city || "—"}
-            </Text>
+        {/* Top-left badge: urgency or new */}
+        {urgencyText ? (
+          <View style={styles.urgencyBadge} pointerEvents="none">
+            <Ionicons name="flame" size={11} color="#FF6B35" />
+            <KText variant="caption" bold style={styles.urgencyText}>{urgencyText}</KText>
           </View>
-          <Text style={{ fontSize: 12, fontWeight: "600", color: colors.textTertiary }}>Nouveau</Text>
-        </View>
+        ) : isNew ? (
+          <View style={styles.newBadge} pointerEvents="none">
+            <KText variant="caption" bold style={styles.newBadgeText}>Nouveau</KText>
+          </View>
+        ) : null}
       </View>
+
+      {/* Info — tappable */}
+      <KPressable onPress={onPress} activeOpacity={0.97} style={styles.cardBody}>
+        {/* Row 1: Title + Rating */}
+        <KRow justify="space-between" align="flex-start">
+          <View style={styles.titleWrap}>
+            <KText variant="h3" bold numberOfLines={1}>{vehicle.title}</KText>
+            <KRow gap={4} align="center" style={styles.locationRow}>
+              <Ionicons name="location-outline" size={12} color={colors.textSecondary} />
+              <KText variant="bodySmall" color="textSecondary">{vehicle.city || "—"}</KText>
+            </KRow>
+          </View>
+          {hasReviews ? (
+            <View style={styles.ratingPill}>
+              <Ionicons name="star" size={12} color="#F59E0B" />
+              <KText variant="labelSmall" bold>{vehicle.reviewAverage}</KText>
+              <KText variant="caption" color="textTertiary">({vehicle.reviewCount})</KText>
+            </View>
+          ) : null}
+        </KRow>
+
+        {/* Row 2: Feature badges — scannable */}
+        <KRow gap={6} wrap style={styles.featureRow}>
+          {vehicle.year ? (
+            <View style={styles.featureBadge}>
+              <KText variant="caption" style={styles.featureText}>{vehicle.year}</KText>
+            </View>
+          ) : null}
+          {vehicle.transmission === "auto" ? (
+            <View style={styles.featureBadge}>
+              <KText variant="caption" style={styles.featureText}>Auto</KText>
+            </View>
+          ) : vehicle.transmission === "manual" ? (
+            <View style={styles.featureBadge}>
+              <KText variant="caption" style={styles.featureText}>Manuelle</KText>
+            </View>
+          ) : null}
+          {vehicle.fuel ? (
+            <View style={styles.featureBadge}>
+              <KText variant="caption" style={styles.featureText}>{FUEL_LABELS[vehicle.fuel] ?? vehicle.fuel}</KText>
+            </View>
+          ) : null}
+          {vehicle.seats ? (
+            <View style={styles.featureBadge}>
+              <KText variant="caption" style={styles.featureText}>{vehicle.seats} pl.</KText>
+            </View>
+          ) : null}
+        </KRow>
+
+        {/* Row 3: Divider */}
+        <View style={styles.divider} />
+
+        {/* Row 4: Trust + DOMINANT Price + CTA arrow */}
+        <KRow justify="space-between" align="center">
+          <KRow gap={5} align="center">
+            <Ionicons name="shield-checkmark" size={14} color={colors.primary} />
+            <KText variant="caption" color="primary">Vérifié</KText>
+          </KRow>
+          <KRow gap={6} align="center">
+            <KRow gap={2} align="baseline">
+              <KText variant="price" bold style={styles.priceMain}>{vehicle.pricePerDay}</KText>
+              <KText variant="bodySmall" color="textSecondary">MAD/j</KText>
+            </KRow>
+            <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
+          </KRow>
+        </KRow>
+      </KPressable>
     </View>
   );
 }
+const useResultCardStyles = createStyles((colors, isDark) => ({
+  card: {
+    marginHorizontal: 16, marginBottom: 16, borderRadius: 16, overflow: "hidden",
+    backgroundColor: colors.card,
+    borderWidth: isDark ? 1 : 0,
+    borderColor: isDark ? colors.cardBorder : "transparent",
+    // Subtle shadow instead of border (light mode)
+    shadowColor: "#000",
+    shadowOpacity: isDark ? 0 : 0.06,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: isDark ? 0 : 3,
+  },
+  imageWrap: { position: "relative" },
+  cardImage: { backgroundColor: colors.bgTertiary },
+  noImage: { backgroundColor: colors.bgTertiary },
+  cardHeart: { position: "absolute", top: 10, right: 10 },
+  dotsRow: {
+    position: "absolute", bottom: 10,
+    left: 0, right: 0,
+    flexDirection: "row", justifyContent: "center",
+    gap: 5,
+  },
+  dot: {
+    width: 6, height: 6, borderRadius: 3,
+    backgroundColor: "rgba(255,255,255,0.4)",
+  },
+  dotActive: {
+    backgroundColor: "#FFF",
+    width: 7, height: 7, borderRadius: 3.5,
+  },
+  imgCounter: {
+    position: "absolute", bottom: 10, right: 10,
+    backgroundColor: "rgba(0,0,0,0.6)", borderRadius: 10,
+    paddingHorizontal: 8, paddingVertical: 3,
+  },
+  imgCounterText: { color: "#FFF", fontSize: 11 },
+  urgencyBadge: {
+    position: "absolute", top: 10, left: 10,
+    flexDirection: "row", alignItems: "center", gap: 4,
+    backgroundColor: "rgba(0,0,0,0.75)", borderRadius: 8,
+    paddingHorizontal: 10, paddingVertical: 5,
+  },
+  urgencyText: { color: "#FF6B35", fontSize: 11 },
+  newBadge: {
+    position: "absolute", top: 10, left: 10,
+    backgroundColor: "rgba(0,0,0,0.7)", borderRadius: 8,
+    paddingHorizontal: 10, paddingVertical: 5,
+  },
+  newBadgeText: { color: "#FFF", fontSize: 11 },
+  cardBody: { paddingHorizontal: 14, paddingTop: 12, paddingBottom: 14 },
+  titleWrap: { flex: 1, marginRight: 10 },
+  locationRow: { marginTop: 2 },
+  ratingPill: {
+    flexDirection: "row", alignItems: "center", gap: 3,
+    backgroundColor: isDark ? colors.bgTertiary : "rgba(0,0,0,0.04)",
+    paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8,
+  },
+  featureRow: { marginTop: 10 },
+  featureBadge: {
+    paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6,
+    backgroundColor: isDark ? colors.bgTertiary : "rgba(0,0,0,0.03)",
+  },
+  featureText: { color: colors.textSecondary, fontSize: 11 },
+  divider: {
+    height: 1, marginVertical: 10,
+    backgroundColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)",
+  },
+  priceMain: { color: colors.text },
+}));
 
 // ═══════════════════════════════════════════════════════
-// Suggestion Mini Card
+// Suggestion Card — Airbnb-style horizontal
 // ═══════════════════════════════════════════════════════
 function SuggestionMiniCard({ vehicle }: { vehicle: any }) {
-  const { colors, isDark } = useTheme();
-
+  const { styles, colors } = useSuggestionStyles();
   return (
-    <Pressable
-      onPress={() => router.push(`/vehicle/${vehicle._id}`)}
-      style={({ pressed }) => ({
-        width: 160, marginRight: 12,
-        opacity: pressed ? 0.9 : 1,
-      })}
-    >
-      {vehicle.coverUrl ? (
-        <Image
-          source={{ uri: vehicle.coverUrl }}
-          style={{ width: "100%", height: 110, borderRadius: 14, backgroundColor: colors.bgTertiary }}
-          resizeMode="cover"
-        />
-      ) : (
-        <View style={{
-          width: "100%", height: 110, borderRadius: 14,
-          backgroundColor: colors.bgTertiary,
-          alignItems: "center", justifyContent: "center",
-        }}>
-          <Ionicons name="car-outline" size={24} color={colors.textTertiary} />
+    <KPressable onPress={() => router.push(`/vehicle/${vehicle._id}`)} activeOpacity={0.9} style={styles.miniCard}>
+      <View style={styles.imgWrap}>
+        {vehicle.coverUrl ? (
+          <KImage source={{ uri: vehicle.coverUrl }} style={styles.img} />
+        ) : (
+          <KVStack align="center" justify="center" style={styles.noImg}>
+            <Ionicons name="car-outline" size={24} color={colors.textTertiary} />
+          </KVStack>
+        )}
+        <View style={styles.miniHeart}>
+          <KFavoriteButton vehicleId={vehicle._id} size={14} variant="overlay" />
         </View>
-      )}
-      <Text numberOfLines={1} style={{ marginTop: 6, fontWeight: "700", fontSize: 13, color: colors.text }}>
-        {vehicle.title}
-      </Text>
-      <Text style={{ color: colors.textSecondary, marginTop: 2, fontSize: 12 }}>
-        {vehicle.pricePerDay} MAD /jour
-      </Text>
-    </Pressable>
+      </View>
+      <KText variant="labelSmall" bold numberOfLines={1} style={styles.miniTitle}>{vehicle.title}</KText>
+      <KRow gap={4} align="center">
+        <Ionicons name="location-outline" size={10} color={colors.textTertiary} />
+        <KText variant="caption" color="textTertiary" numberOfLines={1}>{vehicle.city || "—"}</KText>
+      </KRow>
+      <KText variant="labelSmall" bold style={styles.miniPrice}>{vehicle.pricePerDay} MAD<KText variant="caption" color="textSecondary"> /jour</KText></KText>
+    </KPressable>
   );
 }
+const useSuggestionStyles = createStyles((colors, isDark) => ({
+  miniCard: { width: 180, marginRight: 12 },
+  imgWrap: { position: "relative" },
+  img: { width: "100%", height: 120, borderRadius: 14, backgroundColor: colors.bgTertiary },
+  noImg: { width: "100%", height: 120, borderRadius: 14, backgroundColor: colors.bgTertiary },
+  miniHeart: { position: "absolute", top: 6, right: 6 },
+  miniTitle: { marginTop: 8 },
+  miniPrice: { marginTop: 4 },
+}));
 
 // ═══════════════════════════════════════════════════════
-// Filter Modal (bottom sheet)
+// Filter Modal
 // ═══════════════════════════════════════════════════════
 function FilterModal({
-  visible,
-  onClose,
-  city,
-  setCity,
-  maxPrice,
-  setMaxPrice,
-  suggestedCities,
+  visible, onClose, filters, setFilters, suggestedCities,
 }: {
-  visible: boolean;
-  onClose: () => void;
-  city: string;
-  setCity: (v: string) => void;
-  maxPrice: string;
-  setMaxPrice: (v: string) => void;
+  visible: boolean; onClose: () => void;
+  filters: Filters; setFilters: (f: Filters) => void;
   suggestedCities: string[];
 }) {
-  const { colors, isDark } = useTheme();
-
-  const [localCity, setLocalCity] = useState(city);
-  const [localPrice, setLocalPrice] = useState(maxPrice);
+  const { styles, colors, isDark } = useFilterStyles();
+  const [local, setLocal] = useState<Filters>(filters);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const expandAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     if (visible) {
-      setLocalCity(city);
-      setLocalPrice(maxPrice);
+      setLocal(filters);
+      // Open "more" if any advanced filter is active
+      const hasAdvanced = !!(filters.transmission || filters.fuel || filters.minSeats);
+      setMoreOpen(hasAdvanced);
+      expandAnim.setValue(hasAdvanced ? 1 : 0);
     }
   }, [visible]);
 
-  const apply = () => {
-    setCity(localCity);
-    setMaxPrice(localPrice);
-    onClose();
+  const set = (key: keyof Filters, val: string) => setLocal((prev) => ({ ...prev, [key]: val }));
+  const toggle = (key: keyof Filters, val: string) =>
+    setLocal((prev) => ({ ...prev, [key]: prev[key] === val ? "" : val }));
+
+  const toggleMore = () => {
+    const opening = !moreOpen;
+    setMoreOpen(opening);
+    Animated.timing(expandAnim, {
+      toValue: opening ? 1 : 0, duration: 280,
+      useNativeDriver: false,
+    }).start();
   };
 
+  const apply = () => { setFilters(local); onClose(); };
   const reset = () => {
-    setLocalCity("");
-    setLocalPrice("");
+    setLocal({ q: filters.q, city: "", minPrice: "", maxPrice: "", transmission: "", fuel: "", minSeats: "" });
+    setMoreOpen(false);
+    expandAnim.setValue(0);
   };
+
+  const advancedCount = [local.transmission, local.fuel, local.minSeats].filter(Boolean).length;
+  const totalCount = [local.city, local.minPrice, local.maxPrice, local.transmission, local.fuel, local.minSeats].filter(Boolean).length;
+
+  // Animated height for advanced section
+  const moreHeight = expandAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 260] });
+  const moreOpacity = expandAnim.interpolate({ inputRange: [0, 0.3, 1], outputRange: [0, 0, 1] });
 
   return (
     <Modal visible={visible} animationType="slide" transparent>
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : undefined}
-        style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.25)", justifyContent: "flex-end" }}
+        style={styles.backdrop}
       >
-        <View style={{
-          backgroundColor: colors.bg,
-          borderTopLeftRadius: 22, borderTopRightRadius: 22,
-          paddingTop: 12, maxHeight: "88%",
-        }}>
+        <View style={styles.sheet}>
           {/* Header */}
-          <View style={{
-            paddingHorizontal: 16, paddingBottom: 10,
-            flexDirection: "row", alignItems: "center", justifyContent: "space-between",
-          }}>
-            <Text style={{ fontWeight: "800", fontSize: 16, color: colors.text }}>Filtres</Text>
-            <Pressable
-              onPress={onClose}
-              style={{
-                width: 34, height: 34, borderRadius: 17,
-                backgroundColor: colors.card,
-                borderWidth: 1, borderColor: isDark ? colors.cardBorder : "rgba(0,0,0,0.06)",
-                alignItems: "center", justifyContent: "center",
-              }}
-            >
+          <KRow px="lg" style={styles.sheetHeader} justify="space-between">
+            <KText variant="h3" bold>Filtres</KText>
+            <KPressable onPress={onClose} style={styles.closeBtn}>
               <Ionicons name="close" size={18} color={colors.text} />
-            </Pressable>
-          </View>
+            </KPressable>
+          </KRow>
 
-          <ScrollView
-            showsVerticalScrollIndicator={false}
-            keyboardShouldPersistTaps="handled"
-            contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 18 }}
-          >
-            {/* Ville */}
-            <View style={{ marginTop: 12 }}>
-              <Text style={{ fontWeight: "700", fontSize: 14, color: colors.text, marginBottom: 10 }}>Ville</Text>
-              <View style={{
-                flexDirection: "row", alignItems: "center", gap: 10,
-                backgroundColor: colors.card, borderWidth: 1,
-                borderColor: isDark ? colors.cardBorder : "rgba(0,0,0,0.06)",
-                borderRadius: 16, paddingHorizontal: 12, paddingVertical: 10,
-              }}>
-                <Ionicons name="location-outline" size={18} color={colors.textTertiary} />
-                <TextInput
-                  value={localCity}
-                  onChangeText={setLocalCity}
-                  placeholder="Toutes villes"
-                  placeholderTextColor={colors.inputPlaceholder}
-                  autoCapitalize="words"
-                  autoCorrect={false}
-                  style={{ flex: 1, fontSize: 14, fontWeight: "600", color: colors.inputText }}
-                />
-                {localCity.length > 0 && (
-                  <Pressable onPress={() => setLocalCity("")}>
-                    <Ionicons name="close-circle" size={18} color={colors.textTertiary} />
-                  </Pressable>
-                )}
-              </View>
+          <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled"
+            contentContainerStyle={styles.sheetContent}>
 
-              {/* Suggested cities chips */}
-              {suggestedCities.length > 0 && (
-                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
-                  {suggestedCities.map((c) => (
-                    <Pressable
-                      key={c}
-                      onPress={() => setLocalCity(c)}
-                      style={{
-                        paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999,
-                        backgroundColor: localCity.toLowerCase() === c.toLowerCase() ? colors.primaryLight : colors.card,
-                        borderWidth: 1,
-                        borderColor: localCity.toLowerCase() === c.toLowerCase()
-                          ? colors.primary
-                          : isDark ? colors.cardBorder : "rgba(0,0,0,0.06)",
-                      }}
-                    >
-                      <Text style={{
-                        fontSize: 13, fontWeight: "600",
-                        color: localCity.toLowerCase() === c.toLowerCase() ? colors.primary : colors.text,
-                      }}>
-                        {c}
-                      </Text>
-                    </Pressable>
-                  ))}
-                </View>
+            {/* ── Ville ── */}
+            <KText variant="label" bold style={styles.filterLabel}>Ville</KText>
+            <KRow gap="sm" style={styles.filterInput}>
+              <Ionicons name="location-outline" size={18} color={colors.textTertiary} />
+              <TextInput
+                value={local.city} onChangeText={(v) => set("city", v)}
+                placeholder="Toutes villes" placeholderTextColor={colors.inputPlaceholder}
+                autoCapitalize="words" autoCorrect={false}
+                style={styles.inputText}
+              />
+              {local.city.length > 0 && (
+                <KPressable onPress={() => set("city", "")}>
+                  <Ionicons name="close-circle" size={18} color={colors.textTertiary} />
+                </KPressable>
               )}
-            </View>
+            </KRow>
+            {suggestedCities.length > 0 && (
+              <KRow gap="sm" wrap style={styles.chipRow}>
+                {suggestedCities.map((c) => {
+                  const active = local.city.toLowerCase() === c.toLowerCase();
+                  return (
+                    <KPressable key={c} onPress={() => set("city", active ? "" : c)} style={[
+                      styles.chip, active && styles.chipActive,
+                    ]}>
+                      <KText variant="labelSmall" color={active ? "primary" : "text"}>{c}</KText>
+                    </KPressable>
+                  );
+                })}
+              </KRow>
+            )}
 
-            {/* Budget */}
-            <View style={{ marginTop: 22 }}>
-              <Text style={{ fontWeight: "700", fontSize: 14, color: colors.text, marginBottom: 10 }}>Budget / jour (MAD)</Text>
-              <View style={{ flexDirection: "row", gap: 12 }}>
-                <View style={{ flex: 1 }}>
-                  <Text style={{ fontSize: 12, fontWeight: "600", color: colors.textSecondary, marginBottom: 6 }}>Max</Text>
-                  <View style={{
-                    flexDirection: "row", alignItems: "center",
-                    backgroundColor: colors.card, borderWidth: 1,
-                    borderColor: isDark ? colors.cardBorder : "rgba(0,0,0,0.06)",
-                    borderRadius: 16, paddingHorizontal: 12, paddingVertical: 10,
-                  }}>
-                    <TextInput
-                      value={localPrice}
-                      onChangeText={(t) => setLocalPrice(t.replace(/[^\d]/g, ""))}
-                      keyboardType="number-pad"
-                      placeholder="Pas de limite"
-                      placeholderTextColor={colors.inputPlaceholder}
-                      style={{ flex: 1, fontSize: 14, fontWeight: "600", color: colors.inputText }}
-                    />
-                  </View>
-                </View>
-              </View>
+            {/* ── Budget ── */}
+            <KText variant="label" bold style={styles.filterLabel}>Budget / jour (MAD)</KText>
+            <KRow gap={10}>
+              <KRow style={[styles.filterInput, styles.halfInput]}>
+                <TextInput
+                  value={local.minPrice} onChangeText={(t) => set("minPrice", t.replace(/[^\d]/g, ""))}
+                  keyboardType="number-pad" placeholder="Min"
+                  placeholderTextColor={colors.inputPlaceholder}
+                  style={styles.inputText}
+                />
+              </KRow>
+              <KText variant="bodySmall" color="textTertiary" style={styles.priceDash}>—</KText>
+              <KRow style={[styles.filterInput, styles.halfInput]}>
+                <TextInput
+                  value={local.maxPrice} onChangeText={(t) => set("maxPrice", t.replace(/[^\d]/g, ""))}
+                  keyboardType="number-pad" placeholder="Max"
+                  placeholderTextColor={colors.inputPlaceholder}
+                  style={styles.inputText}
+                />
+              </KRow>
+            </KRow>
+            <KRow gap="sm" wrap style={styles.chipRow}>
+              {[
+                { label: "≤ 200", min: "", max: "200" },
+                { label: "200–500", min: "200", max: "500" },
+                { label: "500–800", min: "500", max: "800" },
+                { label: "800+", min: "800", max: "" },
+              ].map((p) => {
+                const active = local.minPrice === p.min && local.maxPrice === p.max;
+                return (
+                  <KPressable key={p.label} onPress={() => {
+                    if (active) setLocal((prev) => ({ ...prev, minPrice: "", maxPrice: "" }));
+                    else setLocal((prev) => ({ ...prev, minPrice: p.min, maxPrice: p.max }));
+                  }} style={[styles.chip, active && styles.chipActive]}>
+                    <KText variant="labelSmall" color={active ? "primary" : "text"}>{p.label} MAD</KText>
+                  </KPressable>
+                );
+              })}
+            </KRow>
 
-              {/* Quick price chips */}
-              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
-                {["200", "350", "500", "800"].map((p) => (
-                  <Pressable
-                    key={p}
-                    onPress={() => setLocalPrice(localPrice === p ? "" : p)}
-                    style={{
-                      paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999,
-                      backgroundColor: localPrice === p ? colors.primaryLight : colors.card,
-                      borderWidth: 1,
-                      borderColor: localPrice === p ? colors.primary : isDark ? colors.cardBorder : "rgba(0,0,0,0.06)",
-                    }}
-                  >
-                    <Text style={{
-                      fontSize: 13, fontWeight: "600",
-                      color: localPrice === p ? colors.primary : colors.text,
-                    }}>
-                      ≤ {p} MAD
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
-            </View>
+            {/* ── Plus de filtres (collapsible) ── */}
+            <KPressable onPress={toggleMore} style={styles.moreToggle}>
+              <KRow gap={8} align="center">
+                <Ionicons name={moreOpen ? "chevron-up" : "chevron-down"} size={16} color={colors.primary} />
+                <KText variant="label" bold style={styles.moreToggleText}>
+                  Plus de filtres{advancedCount > 0 ? ` (${advancedCount})` : ""}
+                </KText>
+              </KRow>
+            </KPressable>
+
+            <Animated.View style={[styles.moreSection, { maxHeight: moreHeight, opacity: moreOpacity }]}>
+
+              {/* Transmission */}
+              <KText variant="label" bold style={styles.filterLabelCompact}>Transmission</KText>
+              <KRow gap="sm" wrap>
+                {[
+                  { key: "auto", label: "Automatique" },
+                  { key: "manual", label: "Manuelle" },
+                ].map((t) => {
+                  const active = local.transmission === t.key;
+                  return (
+                    <KPressable key={t.key} onPress={() => toggle("transmission", t.key)}
+                      style={[styles.chip, active && styles.chipActive]}>
+                      <KText variant="labelSmall" color={active ? "primary" : "text"}>{t.label}</KText>
+                    </KPressable>
+                  );
+                })}
+              </KRow>
+
+              {/* Carburant */}
+              <KText variant="label" bold style={styles.filterLabelCompact}>Carburant</KText>
+              <KRow gap="sm" wrap>
+                {[
+                  { key: "essence", label: "Essence" },
+                  { key: "diesel", label: "Diesel" },
+                  { key: "hybrid", label: "Hybride" },
+                  { key: "electric", label: "Électrique" },
+                ].map((f) => {
+                  const active = local.fuel === f.key;
+                  return (
+                    <KPressable key={f.key} onPress={() => toggle("fuel", f.key)}
+                      style={[styles.chip, active && styles.chipActive]}>
+                      <KText variant="labelSmall" color={active ? "primary" : "text"}>{f.label}</KText>
+                    </KPressable>
+                  );
+                })}
+              </KRow>
+
+              {/* Places */}
+              <KText variant="label" bold style={styles.filterLabelCompact}>Places minimum</KText>
+              <KRow gap="sm" wrap>
+                {["2", "4", "5", "7"].map((s) => {
+                  const active = local.minSeats === s;
+                  return (
+                    <KPressable key={s} onPress={() => toggle("minSeats", s)}
+                      style={[styles.chip, active && styles.chipActive]}>
+                      <KText variant="labelSmall" color={active ? "primary" : "text"}>{s}+ places</KText>
+                    </KPressable>
+                  );
+                })}
+              </KRow>
+            </Animated.View>
+
           </ScrollView>
 
           {/* Footer */}
-          <View style={{
-            paddingHorizontal: 16, paddingTop: 10, paddingBottom: 16,
-            flexDirection: "row", gap: 10,
-            borderTopWidth: 1, borderTopColor: isDark ? colors.border : "rgba(0,0,0,0.06)",
-          }}>
-            <Pressable
-              onPress={reset}
-              style={({ pressed }) => ({
-                flex: 1, height: 48, borderRadius: 16,
-                backgroundColor: colors.card,
-                borderWidth: 1, borderColor: isDark ? colors.cardBorder : "rgba(0,0,0,0.06)",
-                alignItems: "center", justifyContent: "center",
-                opacity: pressed ? 0.85 : 1,
-              })}
-            >
-              <Text style={{ fontWeight: "700", color: colors.text, fontSize: 13 }}>Réinitialiser</Text>
-            </Pressable>
-
-            <Pressable
-              onPress={apply}
-              style={({ pressed }) => ({
-                flex: 1, height: 48, borderRadius: 16,
-                backgroundColor: colors.primary,
-                alignItems: "center", justifyContent: "center",
-                opacity: pressed ? 0.85 : 1,
-              })}
-            >
-              <Text style={{ fontWeight: "800", color: "#FFF", fontSize: 13 }}>Appliquer</Text>
-            </Pressable>
-          </View>
+          <KRow gap="sm" style={styles.footer}>
+            <KPressable onPress={reset} style={styles.resetBtn}>
+              <KText variant="label" center style={styles.resetLabel}>Réinitialiser</KText>
+            </KPressable>
+            <KPressable onPress={apply} style={styles.applyBtn}>
+              <KText variant="label" bold color="textInverse" center style={styles.applyLabel}>
+                Appliquer{totalCount > 0 ? ` (${totalCount})` : ""}
+              </KText>
+            </KPressable>
+          </KRow>
         </View>
       </KeyboardAvoidingView>
     </Modal>
   );
 }
+const useFilterStyles = createStyles((colors, isDark) => ({
+  backdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.25)", justifyContent: "flex-end" },
+  sheet: {
+    backgroundColor: colors.bg,
+    borderTopLeftRadius: 22, borderTopRightRadius: 22,
+    paddingTop: 12, maxHeight: "88%",
+  },
+  sheetHeader: { paddingBottom: 10 },
+  sheetContent: { paddingHorizontal: 16, paddingBottom: 18 },
+  closeBtn: {
+    width: 34, height: 34, borderRadius: 17, backgroundColor: colors.card,
+    borderWidth: 1, borderColor: isDark ? colors.cardBorder : "rgba(0,0,0,0.06)",
+    alignItems: "center", justifyContent: "center",
+  },
+  filterLabel: { marginTop: 20, marginBottom: 10 },
+  filterLabelCompact: { marginTop: 16, marginBottom: 8 },
+  filterInput: {
+    backgroundColor: colors.card, borderWidth: 1,
+    borderColor: isDark ? colors.cardBorder : "rgba(0,0,0,0.06)",
+    borderRadius: 16, paddingHorizontal: 12, paddingVertical: 10, alignItems: "center",
+  },
+  inputText: { flex: 1, fontSize: 14, fontWeight: "600", color: colors.inputText },
+  halfInput: { flex: 1 },
+  priceDash: { alignSelf: "center" },
+  chipRow: { marginTop: 10 },
+  chip: {
+    paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, borderWidth: 1,
+    backgroundColor: colors.card,
+    borderColor: isDark ? colors.cardBorder : "rgba(0,0,0,0.06)",
+  },
+  chipActive: {
+    backgroundColor: colors.primaryLight,
+    borderColor: colors.primary,
+  },
+  moreToggle: {
+    marginTop: 22, paddingVertical: 12,
+    borderTopWidth: 1, borderTopColor: isDark ? colors.cardBorder : "rgba(0,0,0,0.06)",
+  },
+  moreToggleText: { color: colors.primary },
+  moreSection: { overflow: "hidden" },
+  footer: {
+    paddingHorizontal: 16, paddingTop: 10, paddingBottom: 16,
+    borderTopWidth: 1, borderTopColor: isDark ? colors.border : "rgba(0,0,0,0.06)",
+  },
+  resetBtn: {
+    flex: 1, height: 48, borderRadius: 16, backgroundColor: colors.card,
+    borderWidth: 1, borderColor: isDark ? colors.cardBorder : "rgba(0,0,0,0.06)",
+    alignItems: "center", justifyContent: "center",
+  },
+  resetLabel: { fontSize: 13 },
+  applyBtn: {
+    flex: 1, height: 48, borderRadius: 16, backgroundColor: colors.primary,
+    alignItems: "center", justifyContent: "center",
+  },
+  applyLabel: { fontSize: 13 },
+}));
 
 // ═══════════════════════════════════════════════════════
 // MAIN SEARCH SCREEN
 // ═══════════════════════════════════════════════════════
 export default function Search() {
-  const { colors, isDark } = useTheme();
+  const { styles, colors, isDark } = useStyles();
+  const params = useLocalSearchParams<{ city?: string; startDate?: string; endDate?: string }>();
 
-  const [city, setCity] = useState("");
-  const [maxPrice, setMaxPrice] = useState("");
-  const [q, setQ] = useState("");
+  const [filters, setFilters] = useState<Filters>({
+    q: "", city: params.city || "", minPrice: "", maxPrice: "",
+    transmission: "", fuel: "", minSeats: "",
+  });
+  const [dateRange, setDateRange] = useState<{ start: string; end: string } | null>(
+    params.startDate && params.endDate ? { start: params.startDate, end: params.endDate } : null
+  );
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [sort, setSort] = useState<"reco" | "priceAsc" | "priceDesc">("reco");
 
-  // Debounce city
-  const [debouncedCity, setDebouncedCity] = useState("");
+  // Re-read params when they change (e.g. navigating back from wizard)
   useEffect(() => {
-    const t = setTimeout(() => setDebouncedCity(city), 400);
-    return () => clearTimeout(t);
-  }, [city]);
+    if (params.city) setFilters((f) => ({ ...f, city: params.city! }));
+    if (params.startDate && params.endDate) {
+      setDateRange({ start: params.startDate, end: params.endDate });
+    }
+  }, [params.city, params.startDate, params.endDate]);
+  const [sort, setSort] = useState<"reco" | "priceAsc" | "priceDesc">("reco");
+  const [category, setCategory] = useState("");
+  const searchInputRef = useRef<TextInput>(null);
 
-  // Query
-  const maxPriceNum = maxPrice.trim() ? Number(maxPrice) : undefined;
+  const [debouncedCity, setDebouncedCity] = useState(params.city || "");
+  useEffect(() => { const t = setTimeout(() => setDebouncedCity(filters.city), 400); return () => clearTimeout(t); }, [filters.city]);
+
+  const minPriceNum = filters.minPrice.trim() ? Number(filters.minPrice) : undefined;
+  const maxPriceNum = filters.maxPrice.trim() ? Number(filters.maxPrice) : undefined;
+  const minSeatsNum = filters.minSeats.trim() ? Number(filters.minSeats) : undefined;
+
   const vehicles = useQuery(api.vehicles.searchVehiclesWithCover, {
     city: debouncedCity.trim() || undefined,
+    minPricePerDay: Number.isFinite(minPriceNum as number) ? minPriceNum : undefined,
     maxPricePerDay: Number.isFinite(maxPriceNum as number) ? maxPriceNum : undefined,
+    transmission: filters.transmission || undefined,
+    fuel: filters.fuel || undefined,
+    minSeats: Number.isFinite(minSeatsNum as number) ? minSeatsNum : undefined,
+    startDate: dateRange?.start || undefined,
+    endDate: dateRange?.end || undefined,
     limit: 40,
   });
 
-  // All vehicles (for suggestions)
   const allVehicles = useQuery(api.vehicles.listVehiclesWithCover);
 
-  // Suggested cities
   const suggestedCities = useMemo(() => {
     if (!allVehicles?.length) return [];
     const seen = new Set<string>();
@@ -462,28 +675,26 @@ export default function Search() {
     return cities;
   }, [allVehicles]);
 
-  // Local text filter + sort
   const filtered = useMemo(() => {
     if (!vehicles) return undefined;
     let list = [...vehicles];
-
-    // Text filter
-    if (q.trim()) {
-      const qq = q.trim().toLowerCase();
-      list = list.filter((v) => {
-        const hay = `${v.title} ${v.city}`.toLowerCase();
-        return hay.includes(qq);
-      });
+    if (filters.q.trim()) {
+      const qq = filters.q.trim().toLowerCase();
+      list = list.filter((v) => `${v.title} ${v.city} ${v.brand ?? ""} ${v.model ?? ""}`.toLowerCase().includes(qq));
     }
+    // Category filter (client-side matching on title/fuel)
+    if (category === "electric") list = list.filter((v) => v.fuel === "electric");
+    else if (category === "suv") list = list.filter((v) => /suv|4x4|rav|tucson|tiguan|cr-v/i.test(v.title));
+    else if (category === "sport") list = list.filter((v) => /sport|amg|m3|m4|gtr|rs|type.r|supra|corvette|mustang|gt/i.test(v.title));
+    else if (category === "berline") list = list.filter((v) => /berline|sedan|série|class|accord|camry|passat/i.test(v.title) || (!v.title.match(/suv|4x4|utilitaire/i)));
+    else if (category === "premium") list = list.filter((v) => /mercedes|bmw|audi|porsche|lexus|jaguar|maserati|bentley|range/i.test(v.title));
+    else if (category === "utilitaire") list = list.filter((v) => /utilitaire|van|kangoo|berlingo|partner|transit|sprinter/i.test(v.title));
 
-    // Sort
     if (sort === "priceAsc") list.sort((a, b) => a.pricePerDay - b.pricePerDay);
     else if (sort === "priceDesc") list.sort((a, b) => b.pricePerDay - a.pricePerDay);
-
     return list;
-  }, [vehicles, q, sort]);
+  }, [vehicles, filters.q, category, sort]);
 
-  // Suggestions (vehicles not in results)
   const suggestions = useMemo(() => {
     if (!allVehicles || !filtered) return [];
     const ids = new Set(filtered.map((v: any) => v._id));
@@ -492,20 +703,17 @@ export default function Search() {
 
   const isLoading = vehicles === undefined;
   const resultCount = filtered?.length ?? 0;
-
-  // Active chips
-  const activeChips = makeActiveChips(debouncedCity, maxPrice, q);
+  const activeChips = makeActiveChips(filters);
 
   const clearChip = (key: string) => {
-    if (key === "q") setQ("");
-    else if (key === "city") { setCity(""); setDebouncedCity(""); }
-    else if (key === "maxPrice") setMaxPrice("");
-  };
-
-  const cycleSortLabel = () => {
-    if (sort === "reco") return "Prix ↑";
-    if (sort === "priceAsc") return "Prix ↓";
-    return "Pertinence";
+    if (key === "q") setFilters((prev) => ({ ...prev, q: "" }));
+    else if (key === "city") { setFilters((prev) => ({ ...prev, city: "" })); setDebouncedCity(""); }
+    else if (key === "maxPrice") setFilters((prev) => ({ ...prev, maxPrice: "" }));
+    else if (key === "minPrice") setFilters((prev) => ({ ...prev, minPrice: "" }));
+    else if (key === "price") setFilters((prev) => ({ ...prev, minPrice: "", maxPrice: "" }));
+    else if (key === "transmission") setFilters((prev) => ({ ...prev, transmission: "" }));
+    else if (key === "fuel") setFilters((prev) => ({ ...prev, fuel: "" }));
+    else if (key === "minSeats") setFilters((prev) => ({ ...prev, minSeats: "" }));
   };
 
   const cycleSort = () => {
@@ -514,170 +722,175 @@ export default function Search() {
     else setSort("reco");
   };
 
+  // Scroll-driven collapse
+  const scrollY = useRef(new Animated.Value(0)).current;
+  const SEARCH_BAR_H = 46;
+  const COLLAPSE_AT = 40;
+
+  const searchBarHeight = scrollY.interpolate({
+    inputRange: [0, COLLAPSE_AT],
+    outputRange: [SEARCH_BAR_H, 0],
+    extrapolate: "clamp",
+  });
+  const searchBarOpacity = scrollY.interpolate({
+    inputRange: [0, COLLAPSE_AT * 0.5],
+    outputRange: [1, 0],
+    extrapolate: "clamp",
+  });
+
+  // Sort label
+  const sortLabel = sort === "reco" ? "Pertinence" : sort === "priceAsc" ? "Prix ↑" : "Prix ↓";
+
+  // Result text (hide at 0, compact otherwise)
+  const resultText = isLoading ? null
+    : resultCount === 0 ? null
+    : `${resultCount} résultat${resultCount > 1 ? "s" : ""}`;
+
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }} edges={["top"]}>
-      <FlatList
+    <SafeAreaView style={styles.safeArea} edges={["top"]}>
+
+      {/* ── Sticky header zone ── */}
+      {/* Search bar — collapses on scroll */}
+      <Animated.View style={[styles.searchSection, { height: searchBarHeight, opacity: searchBarOpacity }]}>
+        <KPressable onPress={() => searchInputRef.current?.focus()} style={styles.searchBar}>
+          <Ionicons name="search-outline" size={17} color={colors.primary} />
+          <TextInput
+            ref={searchInputRef}
+            value={filters.q} onChangeText={(v) => setFilters((p) => ({ ...p, q: v }))}
+            placeholder="Où voulez-vous rouler ?"
+            placeholderTextColor={colors.inputPlaceholder}
+            style={styles.searchInput}
+          />
+          {filters.q.length > 0 && (
+            <KPressable onPress={() => setFilters((p) => ({ ...p, q: "" }))} style={styles.clearBtn}>
+              <Ionicons name="close" size={13} color={colors.text} />
+            </KPressable>
+          )}
+        </KPressable>
+      </Animated.View>
+
+      {/* Chips — always visible (sticky) */}
+      <View style={styles.chipSection}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.chipRow}>
+          {/* Filter button */}
+          <KPressable onPress={() => setFiltersOpen(true)} style={styles.filterIconBtn}>
+            <Ionicons name="options-outline" size={16} color={colors.text} />
+            {activeChips.filter((c) => c.key !== "q").length > 0 && (
+              <View style={styles.filterBadge}>
+                <KText variant="caption" bold color="textInverse" style={styles.filterBadgeText}>
+                  {activeChips.filter((c) => c.key !== "q").length}
+                </KText>
+              </View>
+            )}
+          </KPressable>
+
+          {/* Sort — dropdown style */}
+          <KPressable onPress={cycleSort} style={styles.sortChip}>
+            <KText variant="caption" style={styles.sortText}>{sortLabel}</KText>
+            <Ionicons name="chevron-down" size={12} color={colors.textSecondary} />
+          </KPressable>
+
+          {/* Separator */}
+          <View style={styles.chipSep} />
+
+          {/* Category pills — smaller, distinct */}
+          {CATEGORIES.map((c) => {
+            const active = category === c.key;
+            return (
+              <KPressable key={c.key}
+                onPress={() => setCategory(active ? "" : c.key)}
+                style={[styles.catPill, active && styles.catPillActive]}>
+                <KText variant="caption" bold={active}
+                  style={active ? styles.catPillTextActive : styles.catPillText}>{c.label}</KText>
+              </KPressable>
+            );
+          })}
+
+          {/* Active filter chips */}
+          {activeChips.map((c) => (
+            <KPressable key={c.key} onPress={() => clearChip(c.key)} style={styles.activeChip}>
+              <KText variant="caption" bold>{c.label}</KText>
+              <Ionicons name="close-circle" size={12} color={colors.textSecondary} />
+            </KPressable>
+          ))}
+          {/* Date range chip */}
+          {dateRange && (
+            <KPressable onPress={() => setDateRange(null)} style={styles.activeChip}>
+              <Ionicons name="calendar-outline" size={12} color={colors.primary} />
+              <KText variant="caption" bold>
+                {formatDateChip(dateRange.start)} → {formatDateChip(dateRange.end)}
+              </KText>
+              <Ionicons name="close-circle" size={12} color={colors.textSecondary} />
+            </KPressable>
+          )}
+        </ScrollView>
+      </View>
+
+      {/* ── Scrollable content ── */}
+      <Animated.FlatList
         data={filtered ?? []}
         keyExtractor={(item: any) => item._id}
-        contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: 24 }}
+        contentContainerStyle={styles.listContent}
         keyboardShouldPersistTaps="handled"
+        onScroll={Animated.event(
+          [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+          { useNativeDriver: false }
+        )}
+        scrollEventThrottle={16}
 
         ListHeaderComponent={
-          <>
-            {/* Results count */}
-            <View style={{ marginBottom: 8 }}>
-              <Text style={{ fontSize: 22, fontWeight: "800", color: colors.text }}>Explorer</Text>
-              {!isLoading && (
-                <Text style={{ fontSize: 13, color: colors.textSecondary, marginTop: 2 }}>
-                  {resultCount} véhicule{resultCount > 1 ? "s" : ""} disponible{resultCount > 1 ? "s" : ""}
-                </Text>
-              )}
-            </View>
-
-            {/* Search input */}
-            <View style={{
-              flexDirection: "row", alignItems: "center", gap: 10,
-              backgroundColor: colors.card, borderWidth: 1,
-              borderColor: isDark ? colors.cardBorder : "rgba(0,0,0,0.06)",
-              borderRadius: 16, paddingHorizontal: 12, paddingVertical: 10,
-              marginBottom: 10,
-            }}>
-              <Ionicons name="search-outline" size={18} color={colors.primary} />
-              <TextInput
-                value={q}
-                onChangeText={setQ}
-                placeholder="Marque, modèle, mot-clé…"
-                placeholderTextColor={colors.inputPlaceholder}
-                style={{ flex: 1, fontWeight: "600", color: colors.inputText, fontSize: 14 }}
-              />
-              {q.length > 0 && (
-                <Pressable onPress={() => setQ("")} style={{
-                  width: 30, height: 30, borderRadius: 15,
-                  backgroundColor: colors.bgTertiary,
-                  alignItems: "center", justifyContent: "center",
-                }}>
-                  <Ionicons name="close" size={14} color={colors.text} />
-                </Pressable>
-              )}
-            </View>
-
-            {/* Actions row: Filtres + Tri */}
-            <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 8, gap: 10 }}>
-              <Pressable
-                onPress={() => setFiltersOpen(true)}
-                style={({ pressed }) => ({
-                  flexDirection: "row", alignItems: "center", gap: 8,
-                  paddingHorizontal: 14, height: 40, borderRadius: 20,
-                  backgroundColor: colors.card, borderWidth: 1,
-                  borderColor: isDark ? colors.cardBorder : "rgba(0,0,0,0.08)",
-                  opacity: pressed ? 0.85 : 1,
-                })}
-              >
-                <Ionicons name="options-outline" size={16} color={colors.text} />
-                <Text style={{ fontWeight: "600", fontSize: 14, color: colors.text }}>Filtres</Text>
-                {(debouncedCity.trim() || maxPrice.trim()) && (
-                  <View style={{
-                    minWidth: 20, height: 20, borderRadius: 10,
-                    backgroundColor: colors.primary, alignItems: "center", justifyContent: "center",
-                    paddingHorizontal: 5,
-                  }}>
-                    <Text style={{ fontWeight: "800", color: "#FFF", fontSize: 11 }}>
-                      {(debouncedCity.trim() ? 1 : 0) + (maxPrice.trim() ? 1 : 0)}
-                    </Text>
-                  </View>
-                )}
-              </Pressable>
-
-              <Pressable
-                onPress={cycleSort}
-                style={({ pressed }) => ({
-                  flexDirection: "row", alignItems: "center", gap: 8,
-                  paddingHorizontal: 14, height: 40, borderRadius: 20,
-                  backgroundColor: colors.card, borderWidth: 1,
-                  borderColor: isDark ? colors.cardBorder : "rgba(0,0,0,0.08)",
-                  opacity: pressed ? 0.85 : 1,
-                })}
-              >
-                <Ionicons name="swap-vertical-outline" size={16} color={colors.text} />
-                <Text style={{ fontWeight: "600", fontSize: 14, color: colors.text }}>{cycleSortLabel()}</Text>
-              </Pressable>
-            </View>
-
-            {/* Active filter chips */}
-            {activeChips.length > 0 && (
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={{ gap: 8, paddingBottom: 10 }}
-              >
-                {activeChips.map((c) => (
-                  <Pressable
-                    key={c.key}
-                    onPress={() => clearChip(c.key)}
-                    style={{
-                      flexDirection: "row", alignItems: "center", gap: 6,
-                      backgroundColor: isDark ? colors.bgTertiary : "rgba(0,0,0,0.04)",
-                      borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8,
-                      borderWidth: 1, borderColor: isDark ? colors.cardBorder : "rgba(0,0,0,0.06)",
-                    }}
-                  >
-                    <Text style={{ fontWeight: "700", color: colors.text, fontSize: 12 }}>{c.label}</Text>
-                    <Ionicons name="close" size={14} color={colors.text} />
-                  </Pressable>
-                ))}
-              </ScrollView>
-            )}
-          </>
+          resultText ? (
+            <KText variant="caption" color="textTertiary" style={styles.resultCount}>
+              {resultText}
+            </KText>
+          ) : null
         }
 
         renderItem={({ item }: { item: any }) => (
-          <SearchResultCard
-            vehicle={item}
-            onPress={() => router.push(`/vehicle/${item._id}`)}
-          />
+          <SearchResultCard vehicle={item} onPress={() => router.push(`/vehicle/${item._id}`)} />
         )}
 
         ListEmptyComponent={
           isLoading ? (
             <LoadingSkeleton />
           ) : (
-            <View style={{
-              marginTop: 18, backgroundColor: colors.card,
-              borderRadius: 18, padding: 16, gap: 6,
-              borderWidth: isDark ? 1 : 0, borderColor: colors.cardBorder,
-            }}>
-              <Text style={{ fontWeight: "800", color: colors.text, fontSize: 14 }}>
-                Aucun véhicule trouvé
-              </Text>
-              <Text style={{ color: colors.textSecondary, lineHeight: 18, fontSize: 13 }}>
-                Essaie d'élargir tes filtres ou changer de ville.
-              </Text>
-              <Pressable
-                onPress={() => setFiltersOpen(true)}
-                style={({ pressed }) => ({
-                  marginTop: 10, paddingVertical: 12, borderRadius: 14,
-                  backgroundColor: colors.primary,
-                  alignItems: "center", opacity: pressed ? 0.85 : 1,
-                })}
-              >
-                <Text style={{ fontWeight: "800", color: "#FFF", fontSize: 13 }}>Modifier les filtres</Text>
-              </Pressable>
-            </View>
+            <KVStack align="center" gap={10} style={styles.emptyWrap}>
+              <Ionicons name="search-outline" size={36} color={colors.textTertiary} />
+              <KText variant="label" bold center>Aucun résultat pour ces filtres</KText>
+              <KText variant="bodySmall" color="textSecondary" center style={styles.emptyDesc}>
+                Modifie tes critères ou explore une autre catégorie.
+              </KText>
+              <KRow gap={10} style={styles.emptyActions}>
+                <KPressable onPress={() => {
+                  setCategory("");
+                  setFilters({ q: "", city: "", minPrice: "", maxPrice: "", transmission: "", fuel: "", minSeats: "" });
+                  setDebouncedCity("");
+                }} style={styles.emptyGhostBtn}>
+                  <KText variant="labelSmall" bold color="textSecondary">Réinitialiser</KText>
+                </KPressable>
+                <KPressable onPress={() => setFiltersOpen(true)} style={styles.emptyBtn}>
+                  <KText variant="labelSmall" bold color="textInverse">Modifier les filtres</KText>
+                </KPressable>
+              </KRow>
+            </KVStack>
           )
         }
 
         ListFooterComponent={
-          suggestions.length > 0 && !isLoading ? (
-            <View style={{ marginTop: 18 }}>
-              <Text style={{ fontSize: 16, fontWeight: "800", color: colors.text, marginBottom: 12 }}>
-                Découvrir aussi
-              </Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+          suggestions.length > 0 && !isLoading && resultCount <= 5 ? (
+            <KVStack style={styles.suggestSection}>
+              <View style={styles.suggestDivider} />
+              <KText variant="h3" bold style={styles.suggestTitle}>
+                {resultCount === 0 ? "Véhicules populaires" : "Tu pourrais aussi aimer"}
+              </KText>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.suggestScroll}>
                 {suggestions.map((v: any) => (
                   <SuggestionMiniCard key={v._id} vehicle={v} />
                 ))}
               </ScrollView>
-            </View>
+            </KVStack>
           ) : null
         }
       />
@@ -685,10 +898,8 @@ export default function Search() {
       <FilterModal
         visible={filtersOpen}
         onClose={() => setFiltersOpen(false)}
-        city={city}
-        setCity={(c) => { setCity(c); setDebouncedCity(c); }}
-        maxPrice={maxPrice}
-        setMaxPrice={setMaxPrice}
+        filters={filters}
+        setFilters={(f) => { setFilters(f); setDebouncedCity(f.city); }}
         suggestedCities={suggestedCities}
       />
     </SafeAreaView>
@@ -699,16 +910,11 @@ export default function Search() {
 // Loading Skeleton
 // ═══════════════════════════════════════════════════════
 function LoadingSkeleton() {
-  const { colors } = useTheme();
+  const { colors } = useStyles();
   const pulse = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, { toValue: 1, duration: 700, useNativeDriver: true }),
-        Animated.timing(pulse, { toValue: 0, duration: 700, useNativeDriver: true }),
-      ])
-    );
+    const loop = skeletonPulse(pulse);
     loop.start();
     return () => loop.stop();
   }, []);
@@ -719,19 +925,123 @@ function LoadingSkeleton() {
   );
 
   return (
-    <View style={{ gap: 16 }}>
+    <KVStack gap="lg">
       {[1, 2, 3].map((i) => (
         <View key={i} style={{ borderRadius: 20, overflow: "hidden", backgroundColor: colors.card }}>
           <Box w="100%" h={220} r={0} />
           <View style={{ padding: 14, gap: 8 }}>
-            <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-              <Box w="60%" h={16} />
-              <Box w="25%" h={16} />
-            </View>
+            <KRow justify="space-between"><Box w="60%" h={16} /><Box w="25%" h={16} /></KRow>
             <Box w="35%" h={14} />
           </View>
         </View>
       ))}
-    </View>
+    </KVStack>
   );
 }
+
+// ═══════════════════════════════════════════════════════
+// STYLES
+// ═══════════════════════════════════════════════════════
+const useStyles = createStyles((colors, isDark) => ({
+  safeArea: { flex: 1, backgroundColor: colors.bg },
+  listContent: { paddingBottom: 24, flexGrow: 1 },
+
+  // Search bar (collapsible)
+  searchSection: {
+    paddingHorizontal: 16, paddingBottom: 2, overflow: "hidden",
+  },
+  searchBar: {
+    flexDirection: "row", alignItems: "center", gap: 8,
+    backgroundColor: colors.card, borderWidth: 1,
+    borderColor: isDark ? colors.cardBorder : "rgba(0,0,0,0.06)",
+    borderRadius: 12, paddingHorizontal: 12, height: 42,
+  },
+  searchInput: { flex: 1, fontWeight: "600", color: colors.inputText, fontSize: 14 },
+  clearBtn: {
+    width: 26, height: 26, borderRadius: 13,
+    backgroundColor: colors.bgTertiary, alignItems: "center", justifyContent: "center",
+  },
+
+  // Chips section (sticky)
+  chipSection: { backgroundColor: colors.bg },
+  chipRow: { paddingHorizontal: 16, gap: 8, paddingVertical: 5 },
+
+  // Filter icon button
+  filterIconBtn: {
+    width: 34, height: 34, borderRadius: 17,
+    backgroundColor: colors.card, borderWidth: 1,
+    borderColor: isDark ? colors.cardBorder : "rgba(0,0,0,0.08)",
+    alignItems: "center", justifyContent: "center",
+    position: "relative",
+  },
+  filterBadge: {
+    position: "absolute", top: -4, right: -4,
+    minWidth: 16, height: 16, borderRadius: 8,
+    backgroundColor: colors.primary, alignItems: "center", justifyContent: "center",
+    paddingHorizontal: 3,
+  },
+  filterBadgeText: { fontSize: 9 },
+
+  // Sort chip — dropdown style (distinct from categories)
+  sortChip: {
+    flexDirection: "row", alignItems: "center", gap: 4,
+    paddingHorizontal: 12, height: 34, borderRadius: 17,
+    backgroundColor: colors.card, borderWidth: 1,
+    borderColor: isDark ? colors.cardBorder : "rgba(0,0,0,0.08)",
+  },
+  sortText: { color: colors.textSecondary },
+
+  chipSep: {
+    width: 1, height: 18, alignSelf: "center",
+    backgroundColor: isDark ? colors.cardBorder : "rgba(0,0,0,0.06)",
+  },
+
+  // Category pills — smaller, rounder, distinct from sort
+  catPill: {
+    paddingHorizontal: 12, height: 30, borderRadius: 15,
+    justifyContent: "center",
+    backgroundColor: "transparent",
+    borderWidth: 1,
+    borderColor: isDark ? colors.cardBorder : "rgba(0,0,0,0.08)",
+  },
+  catPillActive: {
+    backgroundColor: isDark ? "rgba(59,130,246,0.2)" : "rgba(59,130,246,0.1)",
+    borderColor: colors.primary,
+  },
+  catPillText: { color: colors.textSecondary },
+  catPillTextActive: { color: colors.primary },
+
+  // Active filter chips
+  activeChip: {
+    flexDirection: "row", alignItems: "center", gap: 4,
+    paddingHorizontal: 10, height: 30, borderRadius: 15,
+    backgroundColor: isDark ? colors.bgTertiary : "rgba(59,130,246,0.06)",
+    borderWidth: 1, borderColor: isDark ? colors.cardBorder : "rgba(59,130,246,0.15)",
+  },
+
+  // Result count
+  resultCount: { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 6 },
+
+  // Empty state
+  emptyWrap: { paddingVertical: 32, paddingHorizontal: 28 },
+  emptyDesc: { lineHeight: 18 },
+  emptyActions: { marginTop: 6 },
+  emptyGhostBtn: {
+    paddingVertical: 10, paddingHorizontal: 16, borderRadius: 12,
+    borderWidth: 1, borderColor: isDark ? colors.cardBorder : "rgba(0,0,0,0.1)",
+  },
+  emptyBtn: {
+    paddingVertical: 10, paddingHorizontal: 20, borderRadius: 12,
+    backgroundColor: colors.primary,
+  },
+
+  // Suggestions
+  suggestSection: { marginTop: 8, paddingHorizontal: 16, paddingBottom: 8 },
+  suggestDivider: {
+    height: 1, marginBottom: 16,
+    backgroundColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)",
+  },
+  suggestTitle: { marginBottom: 12 },
+  suggestSubtitle: { marginBottom: 14 },
+  suggestScroll: { paddingRight: 16 },
+}));

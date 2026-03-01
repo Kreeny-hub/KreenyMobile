@@ -7,8 +7,10 @@ const ALLOWED: Record<ReservationStatus, ReservationStatus[]> = {
   accepted_pending_payment: ["pickup_pending", "cancelled"],
   pickup_pending: ["in_progress", "cancelled"],
   in_progress: ["dropoff_pending"],
-  dropoff_pending: ["completed"],
-  completed: [],
+  dropoff_pending: ["completed", "disputed"],
+  completed: ["disputed"],
+  disputed: ["completed"],
+  confirmed: ["pickup_pending", "cancelled"],
   rejected: [],
   cancelled: [],
 };

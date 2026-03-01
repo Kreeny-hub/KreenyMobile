@@ -4,7 +4,32 @@ import { Ionicons } from "@expo/vector-icons";
 import { useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { useAuthStatus } from "../../src/presentation/hooks/useAuthStatus";
-import { useTheme } from "../../src/theme";
+import { usePushNotifications } from "../../src/presentation/hooks/usePushNotifications";
+import { useTheme, haptic } from "../../src/theme";
+import { KText } from "../../src/ui";
+
+function MessagesIcon({ color }: { color: string }) {
+  const { isAuthenticated } = useAuthStatus();
+  const unread = useQuery(api.chat.getUnreadCount, isAuthenticated ? {} : "skip") ?? 0;
+
+  return (
+    <View style={{ width: 28, height: 28 }}>
+      <Ionicons name="chatbubble-outline" size={22} color={color} />
+      {unread > 0 && (
+        <View style={{
+          position: "absolute", top: -4, right: -8,
+          minWidth: 18, height: 18, borderRadius: 9,
+          backgroundColor: "#EF4444", borderWidth: 1.5, borderColor: "#FFF",
+          alignItems: "center", justifyContent: "center", paddingHorizontal: 4,
+        }}>
+          <KText variant="caption" bold style={{ color: "#FFF", fontSize: 10, lineHeight: 13 }}>
+            {unread > 99 ? "99+" : unread}
+          </KText>
+        </View>
+      )}
+    </View>
+  );
+}
 
 function ProfileIcon({ color }: { color: string }) {
   const { isAuthenticated } = useAuthStatus();
@@ -40,9 +65,12 @@ function ProfileIcon({ color }: { color: string }) {
 
 export default function TabsLayout() {
   const { colors, isDark } = useTheme();
+  const { isAuthenticated } = useAuthStatus();
+  usePushNotifications(isAuthenticated);
 
   return (
     <Tabs
+      screenListeners={{ tabPress: () => haptic.light() }}
       screenOptions={{
         headerShown: false,
         tabBarStyle: {
@@ -97,9 +125,7 @@ export default function TabsLayout() {
         name="messages"
         options={{
           title: "Messages",
-          tabBarIcon: ({ color }) => (
-            <Ionicons name="chatbubble-outline" size={22} color={color} />
-          ),
+          tabBarIcon: ({ color }) => <MessagesIcon color={color} />,
         }}
       />
 

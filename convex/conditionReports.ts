@@ -1,5 +1,6 @@
 import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { holdDepositDEV, releaseDepositDEV } from "./_lib/paymentEngine";
 import { emitReservationEvent } from "./_lib/reservationEvents";
 import { assertStatus, getRoleOrThrow, loadReservationOrThrow } from "./_lib/reservationGuards";
@@ -63,16 +64,17 @@ export const getConditionReportWithUrls = query({
     role: v.union(v.literal("owner"), v.literal("renter")),
   },
   handler: async (ctx, args) => {
-    const user = await authComponent.getAuthUser(ctx);
-    if (!user) throw new ConvexError("Unauthenticated");
+    let user;
+    try { user = await authComponent.getAuthUser(ctx); } catch { return null; }
+    if (!user) return null;
     const me = userKey(user);
 
     const reservation = await ctx.db.get(args.reservationId);
-    if (!reservation) throw new ConvexError("ReservationNotFound");
+    if (!reservation) return null;
 
-    // ✅ seuls le loueur et le locataire peuvent lire
+    // seuls le loueur et le locataire peuvent lire
     if (reservation.renterUserId !== me && reservation.ownerUserId !== me) {
-      throw new ConvexError("Forbidden");
+      return null;
     }
 
     const report = await ctx.db
@@ -118,17 +120,18 @@ export const canSubmitConditionReport = query({
     phase: v.union(v.literal("checkin"), v.literal("checkout")),
   },
   handler: async (ctx, args) => {
-    const user = await authComponent.getAuthUser(ctx);
-    if (!user) throw new ConvexError("Unauthenticated");
+    let user;
+    try { user = await authComponent.getAuthUser(ctx); } catch { return { canSubmit: false, reason: "Unauthenticated" as const }; }
+    if (!user) return { canSubmit: false, reason: "Unauthenticated" as const };
     const me = userKey(user);
 
     const reservation = await ctx.db.get(args.reservationId);
-    if (!reservation) throw new ConvexError("ReservationNotFound");
+    if (!reservation) return { canSubmit: false, reason: "ReservationNotFound" as const };
 
     const isOwner = reservation.ownerUserId === me;
     const isRenter = reservation.renterUserId === me;
 
-    if (!isOwner && !isRenter) throw new ConvexError("Forbidden");
+    if (!isOwner && !isRenter) return { canSubmit: false, reason: "Forbidden" as const };
 
     const role = isOwner ? "owner" : "renter";
 
@@ -235,6 +238,19 @@ export const submitConditionReport = mutation({
       idempotencyKey: `report:${String(reportId)}`,
     });
 
+    // 📲 Push notification to the other participant
+    const recipientUserId = realRole === "renter" ? String(reservation.ownerUserId ?? "") : reservation.renterUserId;
+    if (recipientUserId) {
+      const vehicle = await ctx.db.get(reservation.vehicleId);
+      await ctx.scheduler.runAfter(0, internal.push.sendPersonalizedPush, {
+        targetUserId: recipientUserId,
+        senderUserId: submittedByUserId,
+        vehicleTitle: vehicle?.title ?? "un véhicule",
+        type: "condition_report_submitted",
+        reservationId: String(reservation._id),
+      });
+    }
+
     // Vérifie si les deux reports existent pour cette phase
     const reportsForPhase = await ctx.db
       .query("conditionReports")
@@ -303,3 +319,60 @@ export const submitConditionReport = mutation({
 
 
 
+
+// ═══════════════════════════════════════════════════════
+// ADMIN: Get all condition reports for a reservation
+// ═══════════════════════════════════════════════════════
+import { ADMIN_USER_ID } from "./_lib/admin";
+
+export const adminGetAllConditionReports = query({
+  args: { reservationId: v.id("reservations") },
+  handler: async (ctx, args) => {
+    const user = await authComponent.getAuthUser(ctx);
+    if (!user) throw new ConvexError("Unauthenticated");
+    const me = userKey(user);
+    if (!ADMIN_USER_ID || me !== ADMIN_USER_ID) throw new ConvexError("Forbidden");
+
+    const reports = await ctx.db
+      .query("conditionReports")
+      .withIndex("by_reservation_phase", (q) => q.eq("reservationId", args.reservationId))
+      .collect();
+
+    return await Promise.all(
+      reports.map(async (report) => {
+        const requiredUrls: Record<string, string | null> = {};
+        for (const [slot, storageId] of Object.entries(report.requiredPhotos)) {
+          requiredUrls[slot] = await ctx.storage.getUrl(storageId);
+        }
+
+        const detailPhotos = await Promise.all(
+          report.detailPhotos.map(async (d) => ({
+            url: await ctx.storage.getUrl(d.storageId),
+            note: d.note ?? "",
+          }))
+        );
+
+        const videoUrl = report.video360StorageId
+          ? await ctx.storage.getUrl(report.video360StorageId)
+          : null;
+
+        // Get submitter name
+        const profile = await ctx.db
+          .query("userProfiles")
+          .withIndex("by_user", (q) => q.eq("userId", report.submittedByUserId))
+          .unique();
+
+        return {
+          _id: report._id,
+          phase: report.phase,
+          role: report.role,
+          requiredUrls,
+          detailPhotos,
+          videoUrl,
+          submittedBy: profile?.displayName ?? "Inconnu",
+          completedAt: report.completedAt,
+        };
+      })
+    );
+  },
+});

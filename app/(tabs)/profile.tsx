@@ -1,154 +1,71 @@
 import { useEffect, useRef } from "react";
-import {
-  Alert,
-  Animated,
-  Image,
-  Pressable,
-  ScrollView,
-  Text,
-  View,
-} from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { Alert, Animated, View } from "react-native";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { authClient } from "../../src/lib/auth-client";
 import { useAuthStatus } from "../../src/presentation/hooks/useAuthStatus";
-import { useTheme } from "../../src/theme";
+import { useTheme, radius, skeletonPulse } from "../../src/theme";
 
-// ═══════════════════════════════════════════════════════
-// Menu Row
-// ═══════════════════════════════════════════════════════
-function MenuRow({
-  icon,
-  iconColor,
-  iconBg,
-  label,
-  sublabel,
-  onPress,
-  colors,
-  isDark,
-  rightElement,
-  danger,
-}: any) {
-  return (
-    <Pressable
-      onPress={onPress}
-      style={({ pressed }) => ({
-        flexDirection: "row", alignItems: "center", gap: 14,
-        paddingVertical: 14, paddingHorizontal: 4,
-        opacity: pressed ? 0.7 : 1,
-      })}
-    >
-      <View style={{
-        width: 40, height: 40, borderRadius: 12,
-        backgroundColor: iconBg || colors.primaryLight,
-        alignItems: "center", justifyContent: "center",
-      }}>
-        <Ionicons name={icon} size={19} color={iconColor || colors.primary} />
-      </View>
-
-      <View style={{ flex: 1 }}>
-        <Text style={{ fontSize: 15, fontWeight: "600", color: danger ? "#EF4444" : colors.text }}>
-          {label}
-        </Text>
-        {sublabel && (
-          <Text style={{ fontSize: 12, color: colors.textTertiary, marginTop: 1 }}>{sublabel}</Text>
-        )}
-      </View>
-
-      {rightElement || <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />}
-    </Pressable>
-  );
-}
-
-// ═══════════════════════════════════════════════════════
-// Section Card
-// ═══════════════════════════════════════════════════════
-function SectionCard({ title, children, colors, isDark }: any) {
-  return (
-    <View style={{
-      backgroundColor: colors.card,
-      borderRadius: 18,
-      paddingHorizontal: 14,
-      paddingVertical: 4,
-      marginBottom: 14,
-      borderWidth: 1,
-      borderColor: isDark ? colors.cardBorder : "rgba(0,0,0,0.05)",
-    }}>
-      {title && (
-        <Text style={{
-          fontSize: 12, fontWeight: "700", color: colors.textTertiary,
-          paddingTop: 14, paddingBottom: 4, paddingHorizontal: 4,
-          textTransform: "uppercase", letterSpacing: 0.5,
-        }}>
-          {title}
-        </Text>
-      )}
-      {children}
-    </View>
-  );
-}
-
-// ═══════════════════════════════════════════════════════
-// Separator
-// ═══════════════════════════════════════════════════════
-function Sep({ colors, isDark }: any) {
-  return <View style={{ height: 1, backgroundColor: isDark ? colors.border : "rgba(0,0,0,0.04)", marginLeft: 58 }} />;
-}
+// UI Kit
+import {
+  KScreen,
+  KText,
+  KRow,
+  KVStack,
+  KSpacer,
+  KDivider,
+  KPressable,
+  KCard,
+  KButton,
+  KImage,
+  createStyles,
+} from "../../src/ui";
 
 // ═══════════════════════════════════════════════════════
 // Guest Mode
 // ═══════════════════════════════════════════════════════
-function GuestProfile({ colors, isDark }: any) {
+function GuestProfile() {
+  const { styles, colors } = useGuestStyles();
+
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }} edges={["top"]}>
-      <ScrollView contentContainerStyle={{ padding: 18, paddingTop: 30 }}>
-        {/* Welcome */}
-        <View style={{ alignItems: "center", marginBottom: 30, gap: 12 }}>
-          <View style={{
-            width: 80, height: 80, borderRadius: 40,
-            backgroundColor: isDark ? colors.bgTertiary : "#F0F3FA",
-            alignItems: "center", justifyContent: "center",
-          }}>
-            <Ionicons name="person-outline" size={34} color={colors.textTertiary} />
-          </View>
-          <Text style={{ fontSize: 22, fontWeight: "800", color: colors.text }}>Bienvenue sur Kreeny</Text>
-          <Text style={{ fontSize: 14, color: colors.textSecondary, textAlign: "center", lineHeight: 20, maxWidth: 280 }}>
-            Connecte-toi pour gérer tes réservations, publier des annonces et accéder à toutes les fonctionnalités.
-          </Text>
+    <KScreen scroll edges={["top"]}>
+      <KSpacer size="3xl" />
+      <KVStack align="center" gap="md">
+        <View style={styles.guestAvatar}>
+          <Ionicons name="person-outline" size={34} color={colors.textTertiary} />
         </View>
+        <KText variant="displayMedium" center>Bienvenue sur Kreeny</KText>
+        <KText variant="body" color="textSecondary" center style={{ maxWidth: 280, lineHeight: 20 }}>
+          Crée ton compte pour gérer tes réservations, publier des annonces et accéder à toutes les fonctionnalités.
+        </KText>
+      </KVStack>
 
-        {/* Buttons */}
-        <View style={{ gap: 10 }}>
-          <Pressable
-            onPress={() => router.push("/login")}
-            style={({ pressed }) => ({
-              backgroundColor: colors.primary, borderRadius: 16,
-              paddingVertical: 15, alignItems: "center",
-              opacity: pressed ? 0.85 : 1,
-            })}
-          >
-            <Text style={{ color: "#FFF", fontWeight: "800", fontSize: 16 }}>Se connecter</Text>
-          </Pressable>
+      <KSpacer size="3xl" />
 
-          <Pressable
-            onPress={() => router.push("/signup")}
-            style={({ pressed }) => ({
-              backgroundColor: colors.card, borderRadius: 16,
-              paddingVertical: 15, alignItems: "center",
-              borderWidth: 1, borderColor: isDark ? colors.cardBorder : "rgba(0,0,0,0.06)",
-              opacity: pressed ? 0.85 : 1,
-            })}
-          >
-            <Text style={{ color: colors.text, fontWeight: "700", fontSize: 16 }}>Créer un compte</Text>
-          </Pressable>
-        </View>
-      </ScrollView>
-    </SafeAreaView>
+      <KVStack gap="sm">
+        <KButton title="Créer un compte" onPress={() => router.push("/signup")} />
+        <KPressable onPress={() => router.push("/login")} style={styles.signupBtn}>
+          <KText variant="label" center style={{ fontSize: 16 }}>Déjà un compte ? Se connecter</KText>
+        </KPressable>
+      </KVStack>
+    </KScreen>
   );
 }
+
+const useGuestStyles = createStyles((colors, isDark) => ({
+  guestAvatar: {
+    width: 80, height: 80, borderRadius: 40,
+    backgroundColor: isDark ? colors.bgTertiary : "#F0F3FA",
+    alignItems: "center", justifyContent: "center",
+  },
+  signupBtn: {
+    backgroundColor: colors.card, borderRadius: 16,
+    paddingVertical: 15, alignItems: "center",
+    borderWidth: 1, borderColor: isDark ? colors.cardBorder : "rgba(0,0,0,0.06)",
+  },
+}));
 
 // ═══════════════════════════════════════════════════════
 // Skeleton
@@ -158,196 +75,195 @@ function ProfileSkeleton() {
   const pulse = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, { toValue: 1, duration: 700, useNativeDriver: true }),
-        Animated.timing(pulse, { toValue: 0, duration: 700, useNativeDriver: true }),
-      ])
-    );
+    const loop = skeletonPulse(pulse);
     loop.start();
     return () => loop.stop();
   }, []);
 
   const opacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.35, 0.75] });
-  const Box = ({ w, h, r = 8, style }: any) => (
+  const B = ({ w, h, r = 8, style }: any) => (
     <Animated.View style={[{ width: w, height: h, borderRadius: r, backgroundColor: colors.skeleton, opacity }, style]} />
   );
 
   return (
-    <View style={{ flex: 1, backgroundColor: colors.bg, padding: 18, alignItems: "center", paddingTop: 30 }}>
-      <Box w={80} h={80} r={40} />
-      <Box w="50%" h={20} style={{ marginTop: 14 }} />
-      <Box w="35%" h={14} style={{ marginTop: 8 }} />
-      <Box w="100%" h={200} r={18} style={{ marginTop: 24 }} />
-      <Box w="100%" h={160} r={18} style={{ marginTop: 14 }} />
+    <View style={{ flex: 1, backgroundColor: colors.bg, padding: 20, paddingTop: 40 }}>
+      <KRow gap="lg">
+        <B w={72} h={72} r={36} />
+        <KVStack flex={1} gap="sm"><B w="60%" h={20} /><B w="40%" h={14} /></KVStack>
+      </KRow>
+      <B w="100%" h={320} r={18} style={{ marginTop: 28 }} />
     </View>
   );
 }
 
 // ═══════════════════════════════════════════════════════
+// Menu Row (icon dans un carré arrondi)
+// ═══════════════════════════════════════════════════════
+function MenuRow({ icon, iconColor, iconBg, label, onPress, danger, hideChevron, badge }: {
+  icon: string; label: string; onPress: () => void;
+  iconColor?: string; iconBg?: string; danger?: boolean; hideChevron?: boolean;
+  badge?: number;
+}) {
+  const { styles, colors, isDark } = useMenuStyles();
+  const textColor = danger ? "#EF4444" : colors.text;
+
+  return (
+    <KPressable onPress={onPress}>
+      <KRow gap={14} py="md" px="xs">
+        <View style={[styles.iconBox, iconBg ? { backgroundColor: iconBg } : null]}>
+          <Ionicons name={icon as any} size={18} color={iconColor || colors.text} />
+        </View>
+        <KText variant="label" color={textColor} style={{ flex: 1, fontSize: 15 }}>{label}</KText>
+        {!!badge && badge > 0 && (
+          <View style={styles.badgePill}>
+            <KText variant="caption" bold style={{ color: "#FFF", fontSize: 11, lineHeight: 14 }}>
+              {badge > 99 ? "99+" : badge}
+            </KText>
+          </View>
+        )}
+        {!hideChevron && (
+          <Ionicons name="chevron-forward" size={17} color={isDark ? "rgba(255,255,255,0.15)" : "rgba(0,0,0,0.15)"} />
+        )}
+      </KRow>
+    </KPressable>
+  );
+}
+
+const useMenuStyles = createStyles((colors, isDark) => ({
+  iconBox: {
+    width: 38, height: 38, borderRadius: 11,
+    backgroundColor: isDark ? colors.bgTertiary : "#F3F4F6",
+    alignItems: "center", justifyContent: "center",
+  },
+  badgePill: {
+    minWidth: 20, height: 20, borderRadius: 10,
+    backgroundColor: "#EF4444",
+    alignItems: "center", justifyContent: "center",
+    paddingHorizontal: 6,
+  },
+}));
+
+// ═══════════════════════════════════════════════════════
 // MAIN SCREEN
 // ═══════════════════════════════════════════════════════
 export default function ProfileTab() {
-  const { colors, isDark } = useTheme();
+  const { styles, colors, isDark } = useStyles();
   const { isLoading, isAuthenticated, session } = useAuthStatus();
   const user = session?.data?.user;
 
-  const avatarUrl = useQuery(
-    api.userProfiles.getMyAvatarUrl,
-    isAuthenticated ? {} : "skip"
-  );
+  const avatarUrl = useQuery(api.userProfiles.getMyAvatarUrl, isAuthenticated ? {} : "skip");
+  const profile = useQuery(api.userProfiles.getMyProfile, isAuthenticated ? {} : "skip");
+  const badges = useQuery(api.badges.getProfileBadge, isAuthenticated ? {} : "skip");
+  const adminFlag = useQuery(api.reports.isAdmin, isAuthenticated ? {} : "skip");
+  const adminStats = useQuery(api.reports.adminGetStats, adminFlag ? {} : "skip");
 
-  const profile = useQuery(
-    api.userProfiles.getMyProfile,
-    isAuthenticated ? {} : "skip"
-  );
+  const migrate = useMutation(api.migrations.fixOwnerUserIds.migrateMyData);
+  const migrationRan = useRef(false);
+  useEffect(() => {
+    if (isAuthenticated && !migrationRan.current) {
+      migrationRan.current = true;
+      migrate({}).catch(() => {});
+    }
+  }, [isAuthenticated]);
 
   if (isLoading) return <ProfileSkeleton />;
-  if (!isAuthenticated) return <GuestProfile colors={colors} isDark={isDark} />;
+  if (!isAuthenticated) return <GuestProfile />;
 
   const displayName = profile?.displayName || user?.name || user?.email?.split("@")[0] || "Utilisateur";
   const email = user?.email || "";
 
   const onLogout = async () => {
-    Alert.alert(
-      "Se déconnecter",
-      "Tu es sûr de vouloir te déconnecter ?",
-      [
-        { text: "Annuler", style: "cancel" },
-        {
-          text: "Déconnexion",
-          style: "destructive",
-          onPress: async () => {
-            try {
-              await authClient.signOut();
-            } catch (e) {
-              Alert.alert("Erreur", e instanceof Error ? e.message : "Erreur inconnue");
-            }
-          },
+    Alert.alert("Se déconnecter", "Tu es sûr de vouloir te déconnecter ?", [
+      { text: "Annuler", style: "cancel" },
+      {
+        text: "Déconnexion", style: "destructive",
+        onPress: async () => {
+          try { await authClient.signOut(); }
+          catch (e) { Alert.alert("Erreur", e instanceof Error ? e.message : "Erreur inconnue"); }
         },
-      ]
-    );
+      },
+    ]);
   };
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }} edges={["top"]}>
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 18, paddingTop: 24 }}>
+    <KScreen scroll edges={["top"]} bottomInset={30}>
+      <KSpacer size="sm" />
 
-        {/* Avatar + Name */}
-        <Pressable
-          onPress={() => router.push("/profile/avatar")}
-          style={{ alignItems: "center", marginBottom: 24 }}
-        >
+      {/* ── Header: Avatar + Name ── */}
+      <KPressable onPress={() => router.push("/profile/avatar")}>
+        <KRow gap="lg">
           {avatarUrl ? (
-            <Image
-              source={{ uri: avatarUrl }}
-              style={{
-                width: 88, height: 88, borderRadius: 44,
-                backgroundColor: colors.bgTertiary,
-                borderWidth: 3, borderColor: colors.primaryLight,
-              }}
-            />
+            <KImage source={{ uri: avatarUrl }} style={styles.avatar} />
           ) : (
-            <View style={{
-              width: 88, height: 88, borderRadius: 44,
-              backgroundColor: isDark ? colors.bgTertiary : "#F0F3FA",
-              alignItems: "center", justifyContent: "center",
-              borderWidth: 3, borderColor: colors.primaryLight,
-            }}>
-              <Ionicons name="person" size={34} color={colors.primary} />
+            <View style={[styles.avatar, styles.avatarPlaceholder]}>
+              <Ionicons name="person" size={28} color={isDark ? colors.textTertiary : "#94A3B8"} />
             </View>
           )}
+          <KVStack flex={1}>
+            <KText variant="displayMedium">{displayName}</KText>
+            {email ? <KText variant="bodySmall" color="textSecondary" style={{ marginTop: 3 }}>{email}</KText> : null}
+          </KVStack>
+          <Ionicons name="chevron-forward" size={20} color={isDark ? "rgba(255,255,255,0.15)" : "rgba(0,0,0,0.15)"} />
+        </KRow>
+      </KPressable>
 
-          <Text style={{ fontSize: 20, fontWeight: "800", color: colors.text, marginTop: 12 }}>
-            {displayName}
-          </Text>
-          {email ? (
-            <Text style={{ fontSize: 13, color: colors.textSecondary, marginTop: 3 }}>
-              {email}
-            </Text>
-          ) : null}
+      {/* ── Menu principal ── */}
+      <KCard style={styles.menuCard}>
+        <MenuRow icon="calendar-outline" label="Mes réservations" onPress={() => router.push("/profile/reservations")} badge={badges?.renterActionCount} />
+        <KDivider indent={56} />
+        <MenuRow icon="car-outline" label="Mes annonces" onPress={() => router.push("/profile/listings")} />
+        <KDivider indent={56} />
+        <MenuRow icon="heart-outline" label="Mes favoris" onPress={() => router.push("/profile/favorites")} />
+        <KDivider indent={56} />
+        <MenuRow icon="stats-chart-outline" label="Tableau de bord" onPress={() => router.push("/profile/dashboard")} badge={badges?.dashboardBadge} />
+      </KCard>
 
-          <View style={{
-            flexDirection: "row", alignItems: "center", gap: 4,
-            marginTop: 8, backgroundColor: colors.primaryLight,
-            paddingHorizontal: 12, paddingVertical: 6, borderRadius: 999,
-          }}>
-            <Ionicons name="camera-outline" size={14} color={colors.primary} />
-            <Text style={{ fontSize: 12, fontWeight: "700", color: colors.primary }}>Modifier la photo</Text>
-          </View>
-        </Pressable>
+      {/* ── Paramètres + Admin + Déconnexion ── */}
+      <KCard style={styles.settingsCard}>
+        {adminFlag && (
+          <>
+            <MenuRow icon="shield-checkmark-outline" label="Administration" onPress={() => router.push("/admin")} badge={adminStats?.reports?.pending} />
+            <KDivider indent={56} />
+          </>
+        )}
+        <MenuRow icon="settings-outline" label="Paramètres" onPress={() => router.push("/profile/settings")} />
+        <KDivider indent={56} />
+        <MenuRow
+          icon="log-out-outline"
+          iconColor="#EF4444"
+          iconBg={isDark ? "rgba(239,68,68,0.15)" : "#FEF2F2"}
+          label="Se déconnecter"
+          onPress={onLogout}
+          danger
+          hideChevron
+        />
+      </KCard>
 
-        {/* Section: Location */}
-        <SectionCard title="Location" colors={colors} isDark={isDark}>
-          <MenuRow
-            icon="calendar-outline"
-            label="Mes réservations"
-            sublabel="Suivre tes locations en cours"
-            onPress={() => router.push("/profile/reservations")}
-            colors={colors}
-            isDark={isDark}
-          />
-          <Sep colors={colors} isDark={isDark} />
-          <MenuRow
-            icon="chatbubble-outline"
-            label="Messagerie"
-            sublabel="Discussions avec les propriétaires"
-            onPress={() => router.push("/(tabs)/messages")}
-            colors={colors}
-            isDark={isDark}
-          />
-        </SectionCard>
-
-        {/* Section: Loueur */}
-        <SectionCard title="Loueur" colors={colors} isDark={isDark}>
-          <MenuRow
-            icon="car-outline"
-            label="Mes annonces"
-            sublabel="Gérer tes véhicules publiés"
-            onPress={() => router.push("/profile/listings")}
-            colors={colors}
-            isDark={isDark}
-          />
-          <Sep colors={colors} isDark={isDark} />
-          <MenuRow
-            icon="stats-chart-outline"
-            label="Tableau de bord"
-            sublabel="Statistiques et revenus"
-            onPress={() => router.push("/profile/dashboard")}
-            colors={colors}
-            isDark={isDark}
-          />
-        </SectionCard>
-
-        {/* Section: Compte */}
-        <SectionCard title="Compte" colors={colors} isDark={isDark}>
-          <MenuRow
-            icon="settings-outline"
-            label="Paramètres"
-            sublabel="Apparence, notifications"
-            onPress={() => router.push("/profile/settings")}
-            colors={colors}
-            isDark={isDark}
-          />
-          <Sep colors={colors} isDark={isDark} />
-          <MenuRow
-            icon="log-out-outline"
-            iconColor="#EF4444"
-            iconBg={isDark ? "rgba(239,68,68,0.15)" : "#FEF2F2"}
-            label="Se déconnecter"
-            onPress={onLogout}
-            colors={colors}
-            isDark={isDark}
-            danger
-            rightElement={<View />}
-          />
-        </SectionCard>
-
-        {/* Version */}
-        <Text style={{ textAlign: "center", fontSize: 12, color: colors.textTertiary, marginTop: 8, marginBottom: 24 }}>
-          Kreeny v1.0.0
-        </Text>
-      </ScrollView>
-    </SafeAreaView>
+      {/* Version */}
+      <KSpacer size="xl" />
+      <KText variant="caption" color="textTertiary" center>Kreeny v1.0.0</KText>
+    </KScreen>
   );
 }
+
+// ═══════════════════════════════════════════════════════
+// STYLES
+// ═══════════════════════════════════════════════════════
+const useStyles = createStyles((colors, isDark) => ({
+  avatar: {
+    width: 72, height: 72, borderRadius: 36,
+    backgroundColor: colors.bgTertiary,
+  },
+  avatarPlaceholder: {
+    backgroundColor: isDark ? colors.bgTertiary : "#F0F3FA",
+    alignItems: "center", justifyContent: "center",
+  },
+  menuCard: {
+    marginTop: 28, paddingHorizontal: 14,
+    borderWidth: 1, borderColor: isDark ? colors.cardBorder : "rgba(0,0,0,0.05)",
+  },
+  settingsCard: {
+    marginTop: 14, paddingHorizontal: 14,
+    borderWidth: 1, borderColor: isDark ? colors.cardBorder : "rgba(0,0,0,0.05)",
+  },
+}));

@@ -6,10 +6,12 @@
 export const RESERVATION_STATUSES = [
   "requested",
   "accepted_pending_payment",
+  "confirmed",
   "pickup_pending",
   "in_progress",
   "dropoff_pending",
   "completed",
+  "disputed",
   "cancelled",
   "rejected",
 ] as const;
@@ -25,15 +27,18 @@ export function isReservationStatus(v: string): v is ReservationStatus {
 export const BLOCKING_STATUSES = new Set<ReservationStatus>([
   "requested",
   "accepted_pending_payment",
+  "confirmed",
   "pickup_pending",
   "in_progress",
   "dropoff_pending",
+  "disputed",
 ]);
 
 /** Statuts depuis lesquels le locataire peut annuler */
 export const CANCELLABLE_STATUSES = new Set<ReservationStatus>([
   "requested",
   "accepted_pending_payment",
+  "confirmed",
   "pickup_pending",
 ]);
 

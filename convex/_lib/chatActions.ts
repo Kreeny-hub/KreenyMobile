@@ -1,6 +1,10 @@
 export const CHAT_ACTIONS = [
   "PAY_NOW",
+  "ACCEPT",
+  "REJECT",
+  "TRIGGER_RETURN",
   "CANCEL_RESERVATION",
+  "OWNER_CANCEL",
   "DEV_MARK_PAID",
   "DEV_DROPOFF_PENDING",
 ] as const;

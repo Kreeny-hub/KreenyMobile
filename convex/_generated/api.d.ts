@@ -8,7 +8,11 @@
  * @module
  */
 
+import type * as _lib_actionsByStatus from "../_lib/actionsByStatus.js";
+import type * as _lib_admin from "../_lib/admin.js";
+import type * as _lib_cancellationPolicy from "../_lib/cancellationPolicy.js";
 import type * as _lib_chatActions from "../_lib/chatActions.js";
+import type * as _lib_config from "../_lib/config.js";
 import type * as _lib_enums from "../_lib/enums.js";
 import type * as _lib_paymentEngine from "../_lib/paymentEngine.js";
 import type * as _lib_reservationEvents from "../_lib/reservationEvents.js";
@@ -27,10 +31,21 @@ import type * as crons from "../crons.js";
 import type * as dashboard from "../dashboard.js";
 import type * as debug_listReservationStatuses from "../debug/listReservationStatuses.js";
 import type * as debug_migrateProfilesToAuthId from "../debug/migrateProfilesToAuthId.js";
+import type * as disputes from "../disputes.js";
+import type * as favorites from "../favorites.js";
 import type * as files from "../files.js";
+import type * as home from "../home.js";
 import type * as http from "../http.js";
+import type * as kyc from "../kyc.js";
+import type * as migrations_fixOwnerUserIds from "../migrations/fixOwnerUserIds.js";
 import type * as ping from "../ping.js";
+import type * as push from "../push.js";
+import type * as pushReminders from "../pushReminders.js";
+import type * as reports from "../reports.js";
 import type * as reservations from "../reservations.js";
+import type * as reviews from "../reviews.js";
+import type * as seed from "../seed.js";
+import type * as stripe from "../stripe.js";
 import type * as uploads from "../uploads.js";
 import type * as userProfiles from "../userProfiles.js";
 import type * as vehicles from "../vehicles.js";
@@ -42,7 +57,11 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  "_lib/actionsByStatus": typeof _lib_actionsByStatus;
+  "_lib/admin": typeof _lib_admin;
+  "_lib/cancellationPolicy": typeof _lib_cancellationPolicy;
   "_lib/chatActions": typeof _lib_chatActions;
+  "_lib/config": typeof _lib_config;
   "_lib/enums": typeof _lib_enums;
   "_lib/paymentEngine": typeof _lib_paymentEngine;
   "_lib/reservationEvents": typeof _lib_reservationEvents;
@@ -61,10 +80,21 @@ declare const fullApi: ApiFromModules<{
   dashboard: typeof dashboard;
   "debug/listReservationStatuses": typeof debug_listReservationStatuses;
   "debug/migrateProfilesToAuthId": typeof debug_migrateProfilesToAuthId;
+  disputes: typeof disputes;
+  favorites: typeof favorites;
   files: typeof files;
+  home: typeof home;
   http: typeof http;
+  kyc: typeof kyc;
+  "migrations/fixOwnerUserIds": typeof migrations_fixOwnerUserIds;
   ping: typeof ping;
+  push: typeof push;
+  pushReminders: typeof pushReminders;
+  reports: typeof reports;
   reservations: typeof reservations;
+  reviews: typeof reviews;
+  seed: typeof seed;
+  stripe: typeof stripe;
   uploads: typeof uploads;
   userProfiles: typeof userProfiles;
   vehicles: typeof vehicles;

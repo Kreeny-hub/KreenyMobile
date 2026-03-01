@@ -1,5 +1,5 @@
 import { httpRouter } from "convex/server";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { httpAction } from "./_generated/server";
 import { authComponent, createAuth } from "./auth";
 import { userKey } from "./_lib/userKey";
@@ -7,6 +7,28 @@ import { userKey } from "./_lib/userKey";
 const http = httpRouter();
 
 authComponent.registerRoutes(http, createAuth);
+
+// ═══════════════════════════════════════════════════════
+// Stripe webhook endpoint
+// ═══════════════════════════════════════════════════════
+http.route({
+  path: "/stripe/webhook",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const signature = request.headers.get("stripe-signature") ?? "";
+    const payload = await request.text();
+
+    await ctx.runAction(internal.stripe.handleStripeWebhook, {
+      payload,
+      signature,
+    });
+
+    return new Response(JSON.stringify({ received: true }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }),
+});
 
 // ✅ Avatar affichable (inline) pour l’utilisateur connecté
 http.route({

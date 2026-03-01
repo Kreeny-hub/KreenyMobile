@@ -1,5 +1,6 @@
 import { ConvexError, v } from "convex/values";
 import { mutation } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { authComponent } from "./auth";
 import { userKey } from "./_lib/userKey";
 
@@ -54,8 +55,121 @@ export const sendMessage = mutation({
       senderUserId: me,
     });
 
-    await ctx.db.patch(thread._id, { lastMessageAt: now });
+    // ✅ MAJ thread avec lastMessageAt + lastMessageText + lastMessageSenderId
+    await ctx.db.patch(thread._id, {
+      lastMessageAt: now,
+      lastMessageText: text.length > 100 ? text.slice(0, 100) + "…" : text,
+      lastMessageSenderId: me,
+    });
+
+    // 📲 Push notification to the other participant
+    const recipientUserId = thread.renterUserId === me ? thread.ownerUserId : thread.renterUserId;
+    await ctx.scheduler.runAfter(0, internal.push.sendPersonalizedPush, {
+      targetUserId: recipientUserId,
+      senderUserId: me,
+      vehicleTitle: "",
+      type: "new_message",
+      reservationId: String(thread.reservationId),
+      extraData: { threadId: String(thread._id) },
+    });
 
     return { ok: true, messageId };
+  },
+});
+
+// ══════════════════════════════════════════════════════════
+// Send image message
+// ══════════════════════════════════════════════════════════
+export const sendImage = mutation({
+  args: {
+    threadId: v.id("threads"),
+    storageId: v.id("_storage"),
+    caption: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const user = await authComponent.getAuthUser(ctx);
+    if (!user) throw new ConvexError("Unauthenticated");
+    const me = userKey(user);
+
+    const thread = await ctx.db.get(args.threadId);
+    if (!thread) throw new ConvexError("ThreadNotFound");
+
+    if (thread.renterUserId !== me && thread.ownerUserId !== me) {
+      throw new ConvexError("Forbidden");
+    }
+
+    const now = Date.now();
+    const text = args.caption?.trim() || "📷 Photo";
+
+    const messageId = await ctx.db.insert("messages", {
+      threadId: thread._id,
+      reservationId: thread.reservationId,
+      type: "user",
+      text,
+      createdAt: now,
+      senderUserId: me,
+      imageStorageId: args.storageId,
+    });
+
+    await ctx.db.patch(thread._id, {
+      lastMessageAt: now,
+      lastMessageText: text.length > 100 ? text.slice(0, 100) + "…" : text,
+      lastMessageSenderId: me,
+    });
+
+    // Push notification
+    const recipientUserId = thread.renterUserId === me ? thread.ownerUserId : thread.renterUserId;
+    await ctx.scheduler.runAfter(0, internal.push.sendPersonalizedPush, {
+      targetUserId: recipientUserId,
+      senderUserId: me,
+      vehicleTitle: "",
+      type: "new_message",
+      reservationId: String(thread.reservationId),
+      extraData: { threadId: String(thread._id) },
+    });
+
+    return { ok: true, messageId };
+  },
+});
+
+// ══════════════════════════════════════════════════════════
+// Toggle emoji reaction on a message
+// ══════════════════════════════════════════════════════════
+export const toggleReaction = mutation({
+  args: {
+    messageId: v.id("messages"),
+    emoji: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const user = await authComponent.getAuthUser(ctx);
+    if (!user) throw new ConvexError("Unauthenticated");
+    const me = userKey(user);
+
+    const msg = await ctx.db.get(args.messageId);
+    if (!msg) throw new ConvexError("MessageNotFound");
+
+    // Check user belongs to this thread
+    const thread = await ctx.db.get(msg.threadId);
+    if (!thread) throw new ConvexError("ThreadNotFound");
+    if (thread.renterUserId !== me && thread.ownerUserId !== me) {
+      throw new ConvexError("Forbidden");
+    }
+
+    const reactions = (msg as any).reactions ?? [];
+    const existing = reactions.findIndex(
+      (r: any) => r.emoji === args.emoji && r.userId === me
+    );
+
+    let updated;
+    if (existing >= 0) {
+      // Remove reaction
+      updated = reactions.filter((_: any, i: number) => i !== existing);
+    } else {
+      // Add reaction
+      updated = [...reactions, { emoji: args.emoji, userId: me }];
+    }
+
+    await ctx.db.patch(args.messageId, { reactions: updated });
+    return { ok: true };
   },
 });
